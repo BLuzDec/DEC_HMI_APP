@@ -1,0 +1,16 @@
+Variable,Type,Min,Max,Unit
+rEjectingPressure1,Real,0,10,bar
+rTimerEjection1,Real,0,100,s
+rEjectingPressure2,Real,0,10,bar
+rTimerEjection2,Real,0,100,s
+rUncloggingPressure,Real,0,10,bar
+rVacuumPressure1,Real,0,10,bar
+rTimerSuction,Real,0,100,s
+rVacuumPressure2,Real,0,10,bar
+rDelayAlternateVacuum,Real,0,100,s
+rDelayCloseOutletValve,Real,0,100,s
+rDelaySetEjectingPressure1,Real,0,100,s
+rVibratorPressure,Real,0,10,bar
+rTimerVibrator,Real,0,100,s
+rDelayVibrator,Real,0,100,s
+rDelayAtmPressure,Real,0,100,s

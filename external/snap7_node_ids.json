@@ -1,0 +1,42 @@
+{
+    "Node_id_flexpts_S7_1500_snap7": {
+        "Dose_number": [20, 0, "INT"],
+        "StableWeight": [20, 2, "REAL"],
+        "TargetWeight": [20, 6, "REAL"],
+        "EjectorPosition": [20, 10, "REAL"],
+        "InstantDensity": [20, 14, "REAL"],
+        "AvgDensity": [20, 18, "REAL"],
+        "FlexPTS_running": [20, 82, "BOOL"],
+        "PT_ChamberValve": [20, 84, "REAL"],
+        "PR_ChamberValve": [20, 88, "REAL"],
+        "PT_OutletValve": [20, 92, "REAL"],
+        "PR_OutletValve": [20, 96, "REAL"],
+        "arrPT_chamber": [20, 100, "REAL", 600],
+        "arrPR_chamber": [20, 2504, "REAL", 600],
+        "FlexPTS_running_Keyence1": [20, 4908, "BOOL"],
+        "FT_Keyence1": [20, 4910, "REAL"],
+        "PT_Keyence1": [20, 4914, "REAL"],
+        "arrPT_Keyence1": [20, 4918, "REAL", 600],
+        "FlexPTS_running_Keyence2": [20, 7322, "BOOL"],
+        "FT_Keyence2": [20, 7324, "REAL"],
+        "PT_Keyence2": [20, 7328, "REAL"],
+        "arrPT_Keyence2": [20, 7332, "REAL", 600],
+        "recipes": {
+            "rEjectingPressure1": [20, 22, "REAL"],
+            "rTimerEjection1": [20, 26, "REAL"],
+            "rEjectingPressure2": [20, 30, "REAL"],
+            "rTimerEjection2": [20, 34, "REAL"],
+            "rUncloggingPressure": [20, 38, "REAL"],
+            "rVacuumPressure1": [20, 42, "REAL"],
+            "rTimerSuction": [20, 46, "REAL"],
+            "rVacuumPressure2": [20, 50, "REAL"],
+            "rDelayAlternateVacuum": [20, 54, "REAL"],
+            "rDelayCloseOutletValve": [20, 58, "REAL"],
+            "rDelaySetEjectingPressure1": [20, 62, "REAL"],
+            "rVibratorPressure": [20, 66, "REAL"],
+            "rTimerVibrator": [20, 70, "REAL"],
+            "rDelayVibrator": [20, 74, "REAL"],
+            "rDelayAtmPressure": [20, 78, "REAL"]
+        }
+    }
+}

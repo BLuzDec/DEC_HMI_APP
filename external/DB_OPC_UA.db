@@ -1,0 +1,56 @@
+﻿DATA_BLOCK "DB_OPC_UA"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+NON_RETAIN
+   STRUCT 
+      Dose_number { ExternalWritable := 'False'} : Int;
+      StableWeight { ExternalWritable := 'False'} : Real;
+      TargetWeight { ExternalWritable := 'False'} : Real;
+      EjectorPosition { ExternalWritable := 'False'} : Real;
+      InstantDensity { ExternalWritable := 'False'} : Real;
+      AvgDensity { ExternalWritable := 'False'} : Real;
+      Recipes : Struct
+         rEjectingPressure1 { ExternalWritable := 'False'} : Real;
+         rTimerEjection1 { ExternalWritable := 'False'} : Real;
+         rEjectingPressure2 : Real;
+         rTimerEjection2 : Real;
+         rUncloggingPressure : Real;
+         rVacuumPressure1 : Real;
+         rTimerSuction { ExternalWritable := 'False'} : Real;
+         rVacuumPressure2 : Real;
+         rDelayAlternateVacuum : Real;
+         rDelayCloseOutletValve : Real;
+         rDelaySetEjectingPressure1 : Real;
+         rVibratorPressure : Real;
+         rTimerVibrator : Real;
+         rDelayVibrator : Real;
+         rDelayAtmPressure : Real;
+      END_STRUCT;
+      Pressures : Struct
+         FlexPTS_running : Bool;
+         PT_ChamberValve : Real;
+         PR_ChamberValve : Real;
+         PT_OutletValve : Real;
+         PR_OutletValve : Real;
+         arrPT_chamber : Array[0..600] of Real;
+         arrPR_chamber : Array[0..600] of Real;
+      END_STRUCT;
+      FPT_Keyence_1 : Struct
+         FlexPTS_running : Bool;
+         FT : Real;
+         PT : Real;
+         arrPT : Array[0..600] of Real;
+      END_STRUCT;
+      FPT_Keyence_2 : Struct
+         FlexPTS_running : Bool;
+         FT : Real;
+         PT : Real;
+         arrPT : Array[0..600] of Real;
+      END_STRUCT;
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK
+
