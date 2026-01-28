@@ -24,6 +24,22 @@ class PLCThread(threading.Thread):
         self.last_error = None
         self._comm_speed_lock = threading.Lock()  # Lock for thread-safe speed updates
         self._write_lock = threading.Lock()  # Lock for thread-safe writes
+        
+        # Track last array read time for 1-second interval
+        self.last_array_read_time = {}
+        
+        # Map array variables to their trigger variables
+        self.array_triggers = {
+            'arrPT_chamber': 'FlexPTS_running',
+            'arrPR_chamber': 'FlexPTS_running',
+            'arrPT_Keyence1': 'FlexPTS_running_Keyence1',
+            'arrFT_Keyence1': 'FlexPTS_running_Keyence1',
+            'arrPT_Keyence2': 'FlexPTS_running_Keyence2',
+            'arrFT_Keyence2': 'FlexPTS_running_Keyence2',
+            # Legacy names for backward compatibility
+            'PT_Chamber_Array': 'FlexPTS_running',
+            'PR_Chamber_Array': 'FlexPTS_running',
+        }
 
         # Get the directory where this file is located
         self.external_dir = os.path.dirname(os.path.abspath(__file__))
@@ -152,6 +168,8 @@ class PLCThread(threading.Thread):
         
         self._emit_status("info", f"Connecting to PLC at {self.ip_address}...")
         last_logged_dose_number = None
+        # Track trigger variable states (persists across loop iterations)
+        trigger_states = {}
         try:
             self.client.connect(self.ip_address, 0, 1)
             success_msg = f"Successfully connected to PLC at {self.ip_address}"
@@ -168,36 +186,81 @@ class PLCThread(threading.Thread):
         while not self.stop_event.is_set():
             try:
                 current_values = {}
+                # Separate arrays from scalars to read arrays with delay
+                array_vars = []
+                scalar_vars = []
+                
                 for var_name, node_info in self.take_specific_nodes.items():
+                    if len(node_info) == 4:
+                        array_vars.append((var_name, node_info))
+                    else:
+                        scalar_vars.append((var_name, node_info))
+                
+                # Read scalar variables first (faster)
+                for var_name, node_info in scalar_vars:
                     try:
-                        if len(node_info) == 4:
-                            db_number, byte_offset, var_type, array_size = node_info
-                            value = self.read_signal(db_number, byte_offset, var_type, var_name, array_size)
-                        else:
-                            db_number, byte_offset, var_type = node_info
-                            value = self.read_signal(db_number, byte_offset, var_type, var_name)
+                        db_number, byte_offset, var_type = node_info
+                        value = self.read_signal(db_number, byte_offset, var_type, var_name)
                         
-                        # Only emit valid values (skip None and invalid types)
                         if value is not None:
-                            # For arrays, check if it's a valid list
-                            if isinstance(value, list):
-                                if len(value) > 0:
-                                    current_values[var_name] = value
-                                    # Emit array length so arrays appear in UI variable list
-                                    # Arrays are stored as lists but displayed with their length
-                                    self.signal_emitter.emit(var_name, len(value))
-                            else:
-                                # For scalar values, ensure it's numeric
-                                try:
-                                    float(value)
-                                    current_values[var_name] = value
-                                    self.signal_emitter.emit(var_name, value)
-                                except (ValueError, TypeError):
-                                    # Skip non-numeric values
-                                    pass
+                            try:
+                                float(value)
+                                current_values[var_name] = value
+                                self.signal_emitter.emit(var_name, value)
+                                
+                                # Store trigger variable states for array reading logic
+                                if var_name in ['FlexPTS_running', 'FlexPTS_running_Keyence1', 'FlexPTS_running_Keyence2']:
+                                    trigger_states[var_name] = bool(value)
+                            except (ValueError, TypeError):
+                                pass
                     except Exception as e:
-                        # Skip variables that cause errors
-                        logging.debug(f"Skipping variable {var_name} due to error: {e}")
+                        logging.debug(f"Skipping scalar variable {var_name} due to error: {e}")
+                        continue
+                
+                # Read array variables only when trigger is TRUE and 1 second has passed
+                current_time = time.time()
+                for var_name, node_info in array_vars:
+                    # Get the trigger variable for this array
+                    trigger_var = self.array_triggers.get(var_name)
+                    if not trigger_var:
+                        # No trigger defined, skip this array
+                        continue
+                    
+                    # Check if trigger is TRUE
+                    trigger_state = trigger_states.get(trigger_var, False)
+                    if not trigger_state:
+                        # Trigger is FALSE - don't read arrays
+                        continue
+                    
+                    # Check if 1 second has passed since last read for this array
+                    last_read = self.last_array_read_time.get(var_name, 0)
+                    if current_time - last_read < 1.0:
+                        # Less than 1 second since last read - skip this cycle
+                        continue
+                    
+                    # Trigger is TRUE and 1 second has passed - read the array
+                    try:
+                        db_number, byte_offset, var_type, array_size = node_info
+                        value = self.read_signal(db_number, byte_offset, var_type, var_name, array_size)
+                        
+                        # Update last read time
+                        self.last_array_read_time[var_name] = current_time
+                        
+                        if value is not None and isinstance(value, list) and len(value) > 0:
+                            # Successfully received array data - emit full array for plotting
+                            current_values[var_name] = value
+                            # For arrays, emit the full array so all values can be plotted at once
+                            self.signal_emitter.emit(var_name, value)
+                        else:
+                            # Array read returned None or empty - don't emit, preserve last known value
+                            logging.debug(f"Array {var_name} returned None/empty, preserving last known value")
+                    except Exception as e:
+                        # Log error but continue - preserve last known value
+                        error_str = str(e)
+                        if 'Job pending' in error_str or 'CLI' in error_str:
+                            logging.debug(f"PLC busy for array {var_name}, preserving last known value")
+                        else:
+                            logging.debug(f"Array {var_name} read failed: {e}")
                         continue
                 
                 self.read_count += 1

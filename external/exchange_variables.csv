@@ -16,7 +16,9 @@ FlexPTS_running_Keyence1,Bool,0,1,-
 FT_Keyence1,Real,0,1000,N
 PT_Keyence1,Real,0,10,bar
 arrPT_Keyence1,Array,0,10,bar
+arrFT_Keyence1,Array,0,1000,N
 FlexPTS_running_Keyence2,Bool,0,1,-
 FT_Keyence2,Real,0,1000,N
 PT_Keyence2,Real,0,10,bar
 arrPT_Keyence2,Array,0,10,bar
+arrFT_Keyence2,Array,0,1000,N

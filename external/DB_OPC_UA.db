@@ -40,12 +40,14 @@ NON_RETAIN
          FT : Real;
          PT : Real;
          arrPT : Array[0..600] of Real;
+         arrFT : Array[0..600] of Real;
       END_STRUCT;
       FPT_Keyence_2 : Struct
          FlexPTS_running : Bool;
          FT : Real;
          PT : Real;
          arrPT : Array[0..600] of Real;
+         arrFT : Array[0..600] of Real;
       END_STRUCT;
    END_STRUCT;
 

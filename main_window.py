@@ -51,11 +51,11 @@ class GraphConfigDialog(QDialog):
 
 class RangeConfigDialog(QDialog):
     """Dialog to configure Min/Max ranges for axes."""
-    def __init__(self, current_settings, has_dual_y=False, parent=None):
+    def __init__(self, current_settings, has_dual_y=False, show_recipes=True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Axis Range Settings")
         self.setModal(True)
-        self.resize(400, 200)
+        self.resize(400, 250)
         self.setStyleSheet("""
             QDialog { background-color: #333; color: white; }
             QLabel { color: white; }
@@ -106,6 +106,16 @@ class RangeConfigDialog(QDialog):
         if has_dual_y:
             self.y2_row, self.chk_y2_auto, self.spin_y2_min, self.spin_y2_max = create_axis_row("y2", "Y Axis (Right)")
             layout.addLayout(self.y2_row)
+        
+        # Recipe display toggle
+        recipe_layout = QHBoxLayout()
+        self.chk_show_recipes = QCheckBox("Show Recipe Parameters in Tooltip")
+        self.chk_show_recipes.setChecked(show_recipes)
+        self.chk_show_recipes.setStyleSheet("color: white; padding: 5px;")
+        recipe_layout.addWidget(self.chk_show_recipes)
+        recipe_layout.addStretch()
+        layout.addLayout(recipe_layout)
+        
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -115,6 +125,7 @@ class RangeConfigDialog(QDialog):
         settings = {
             "x": {"auto": self.chk_x_auto.isChecked(), "min": self.spin_x_min.value(), "max": self.spin_x_max.value()},
             "y1": {"auto": self.chk_y1_auto.isChecked(), "min": self.spin_y1_min.value(), "max": self.spin_y1_max.value()},
+            "show_recipes": self.chk_show_recipes.isChecked()
         }
         if self.has_dual_y:
              settings["y2"] = {"auto": self.chk_y2_auto.isChecked(), "min": self.spin_y2_min.value(), "max": self.spin_y2_max.value()}
@@ -136,6 +147,7 @@ class DynamicPlotWidget(QWidget):
         self.recipe_params = recipe_params if recipe_params else []
         self.latest_values_cache = latest_values_cache if latest_values_cache else {}
         self.variable_metadata = variable_metadata if variable_metadata else {}
+        self.show_recipes_in_tooltip = True  # Default to showing recipes
         self.comm_speed = comm_speed  # Communication speed for time calculation
         
         # Track start time for time-based graphs
@@ -268,15 +280,23 @@ class DynamicPlotWidget(QWidget):
         Uses the actual timestamp when the signal was received"""
         # Use the stored timestamp for this data point index
         if hasattr(self, 'buffer_timestamps') and len(self.buffer_timestamps) > 0:
-            # Convert index to actual buffer position
-            if index < len(self.buffer_timestamps):
-                actual_time = self.buffer_timestamps[int(index)]
-            elif len(self.buffer_timestamps) > 0:
-                # Index beyond stored timestamps, use most recent
-                actual_time = self.buffer_timestamps[-1]
-            else:
-                # No timestamps yet, use current time
-                actual_time = datetime.now()
+            try:
+                # Convert index to integer, handling negative and out-of-range values
+                idx = int(round(index))
+                
+                # Clamp index to valid range
+                if idx < 0:
+                    # Negative index, use first timestamp
+                    actual_time = self.buffer_timestamps[0]
+                elif idx >= len(self.buffer_timestamps):
+                    # Index beyond stored timestamps, use most recent
+                    actual_time = self.buffer_timestamps[-1]
+                else:
+                    # Valid index within range
+                    actual_time = self.buffer_timestamps[idx]
+            except (IndexError, ValueError, TypeError):
+                # Fallback to most recent timestamp if any error occurs
+                actual_time = self.buffer_timestamps[-1] if len(self.buffer_timestamps) > 0 else datetime.now()
         else:
             # Fallback: use current time
             actual_time = datetime.now()
@@ -367,11 +387,18 @@ class DynamicPlotWidget(QWidget):
         try:
             # Get the top-level window as parent
             parent_window = self.window() if self.window() else None
-            dialog = RangeConfigDialog(self.range_settings, has_dual_y=(self.p2 is not None), parent=parent_window)
+            dialog = RangeConfigDialog(
+                self.range_settings, 
+                has_dual_y=(self.p2 is not None),
+                show_recipes=self.show_recipes_in_tooltip,
+                parent=parent_window
+            )
             dialog.setModal(True)
             if dialog.exec() == QDialog.Accepted:
-                self.range_settings = dialog.get_settings()
-                settings = self.range_settings
+                settings = dialog.get_settings()
+                self.range_settings = settings
+                
+                # Update axis ranges
                 self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.XAxis, enable=settings["x"]["auto"])
                 if not settings["x"]["auto"]:
                     self.plot_widget.plotItem.setXRange(settings["x"]["min"], settings["x"]["max"], padding=0)
@@ -382,6 +409,10 @@ class DynamicPlotWidget(QWidget):
                     self.p2.enableAutoRange(axis=pg.ViewBox.YAxis, enable=settings["y2"]["auto"])
                     if not settings["y2"]["auto"]:
                         self.p2.setYRange(settings["y2"]["min"], settings["y2"]["max"], padding=0)
+                
+                # Update recipe display setting
+                if "show_recipes" in settings:
+                    self.show_recipes_in_tooltip = settings["show_recipes"]
         except Exception as e:
             print(f"Error opening range settings dialog: {e}")
             import traceback
@@ -453,6 +484,104 @@ class DynamicPlotWidget(QWidget):
         txt = f"{var_name}: {y_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
         self.value_labels[var_name].setText(txt)
 
+    def update_data_array(self, var_name, array_values):
+        """Add all array values at once to the graph.
+        Arrays contain oversampled data that should be plotted together.
+        Timestamps are distributed over the communication cycle time."""
+        if var_name not in self.variables:
+            return
+        
+        if not array_values or len(array_values) == 0:
+            return
+        
+        # Get current timestamp
+        current_time = datetime.now()
+        array_length = len(array_values)
+        
+        # Calculate time step: distribute array values over the communication cycle
+        # Assume array values were sampled over the communication cycle time
+        time_step = self.comm_speed / array_length if array_length > 0 else 0
+        
+        # Add all array values to buffer with distributed timestamps
+        base_buffer_length = len(self.buffers_y.get(var_name, []))
+        
+        for i, val in enumerate(array_values):
+            try:
+                y_val = float(val)
+                if np.isnan(y_val) or np.isinf(y_val):
+                    continue
+                
+                # Add to buffer
+                self.buffers_y[var_name].append(y_val)
+                
+                # Calculate timestamp for this value (distributed over comm cycle)
+                # First value gets current time, subsequent values are spaced by time_step
+                value_timestamp = current_time - timedelta(seconds=(array_length - i - 1) * time_step)
+                
+                # Add timestamp
+                self.buffer_timestamps.append(value_timestamp)
+                
+            except (ValueError, TypeError):
+                continue
+        
+        # Update the plot with all new data
+        if self.is_xy_plot:
+            # For XY plots, if this is the x_axis_source, we need to update all dependent variables
+            # Otherwise, use the x values from x_axis_source
+            if var_name == self.x_axis_source:
+                # This array is the x-axis source - update x buffer
+                for val in array_values:
+                    try:
+                        x_val = float(val)
+                        if not (np.isnan(x_val) or np.isinf(x_val)):
+                            self.buffers_x[var_name].append(x_val)
+                    except (ValueError, TypeError):
+                        continue
+                # Update all variables that use this as x-axis
+                for other_var in self.variables:
+                    if other_var != var_name:
+                        x_data = [float(x) for x in self.buffers_x.get(var_name, []) if x is not None and isinstance(x, (int, float)) and not np.isnan(x)]
+                        y_data = [float(y) for y in self.buffers_y.get(other_var, []) if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
+                        min_len = min(len(x_data), len(y_data))
+                        if min_len > 0 and other_var in self.lines:
+                            try:
+                                self.lines[other_var].setData(x_data[:min_len], y_data[:min_len])
+                            except Exception as e:
+                                logging.warning(f"Error plotting {other_var}: {e}")
+            else:
+                # Regular variable in XY plot - use x values from x_axis_source
+                x_data = [float(x) for x in self.buffers_x.get(self.x_axis_source, []) if x is not None and isinstance(x, (int, float)) and not np.isnan(x)]
+                y_data = [float(y) for y in self.buffers_y[var_name] if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
+                min_len = min(len(x_data), len(y_data))
+                if min_len > 0:
+                    try:
+                        self.lines[var_name].setData(x_data[:min_len], y_data[:min_len])
+                    except Exception as e:
+                        logging.warning(f"Error plotting {var_name}: {e}")
+        else:
+            # For time-based plots, plot all y values
+            y_data = [float(y) for y in self.buffers_y[var_name] if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
+            if y_data:
+                try:
+                    self.lines[var_name].setData(y_data)
+                except Exception as e:
+                    logging.warning(f"Error plotting {var_name}: {e}")
+        
+        # Update value label with latest value from this array update
+        # This is the most recent value from the newly received array
+        latest_value = array_values[-1] if array_values else 0.0
+        data = [d for d in self.buffers_y[var_name] if d is not None and isinstance(d, (int, float)) and not np.isnan(d)]
+        if data:
+            try:
+                min_v, max_v = min(data), max(data)
+            except (ValueError, TypeError):
+                min_v, max_v = 0.0, 0.0
+        else:
+            min_v, max_v = 0.0, 0.0
+        
+        txt = f"{var_name}: {latest_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
+        self.value_labels[var_name].setText(txt)
+
     def mouse_moved(self, evt):
         pos = evt[0]
         if self.plot_widget.sceneBoundingRect().contains(pos):
@@ -471,8 +600,23 @@ class DynamicPlotWidget(QWidget):
             if self.is_xy_plot:
                 html += f"<b>{self.x_axis_source}: {x_val:.2f}</b><br/>"
             else:
-                # Format time as actual time of day (HH:MM:SS) matching the header
-                time_str = self.format_time_from_index(x_val)
+                # Get the actual timestamp from buffer_timestamps corresponding to this index
+                # The index should correspond to the position in the buffer
+                idx_int = int(round(idx))
+                if hasattr(self, 'buffer_timestamps') and len(self.buffer_timestamps) > 0:
+                    # Clamp index to valid range
+                    if idx_int < 0:
+                        timestamp = self.buffer_timestamps[0]
+                    elif idx_int >= len(self.buffer_timestamps):
+                        timestamp = self.buffer_timestamps[-1]
+                    else:
+                        timestamp = self.buffer_timestamps[idx_int]
+                    
+                    # Format timestamp as HH:MM:SS.mmm
+                    time_str = timestamp.strftime("%H:%M:%S.%f")[:-3]  # Remove last 3 digits of microseconds to get milliseconds
+                else:
+                    # Fallback: calculate time from index and comm_speed
+                    time_str = self.format_time_from_index(idx)
                 html += f"<b>Time: {time_str}</b><br/>"
             html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
             for var in self.variables:
@@ -482,12 +626,14 @@ class DynamicPlotWidget(QWidget):
                     color = self.lines[var].opts['pen'].color().name()
                     html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_val:.2f}</span><br/>"
 
-            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
-            html += "<b style='color: #FFEA00;'>Recipe Parameters:</b><br/>"
-            for param in self.recipe_params:
-                value = self.latest_values_cache.get(param, "N/A")
-                val_str = f"{value:.2f}" if isinstance(value, (float, int)) else str(value)
-                html += f"<span style='color: #ccc;'>{param.replace('_', ' ')}:</span> <b>{val_str}</b><br/>"
+            # Show recipe parameters only if enabled
+            if self.show_recipes_in_tooltip and self.recipe_params:
+                html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+                html += "<b style='color: #FFEA00;'>Recipe Parameters:</b><br/>"
+                for param in self.recipe_params:
+                    value = self.latest_values_cache.get(param, "N/A")
+                    val_str = f"{value:.2f}" if isinstance(value, (float, int)) else str(value)
+                    html += f"<span style='color: #ccc;'>{param.replace('_', ' ')}:</span> <b>{val_str}</b><br/>"
             html += "</div>"
 
             self.tooltip.setHtml(html)
@@ -569,9 +715,9 @@ class MainWindow(QMainWindow):
         buffer_label = QLabel("Buffer:")
         buffer_label.setStyleSheet("color: #aaa; font-size: 11px;")
         buffer_label.setFixedWidth(60)
-        self.buffer_size_input = QLineEdit("500")
+        self.buffer_size_input = QLineEdit("5000")
         self.buffer_size_input.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
-        self.buffer_size_input.setToolTip("Number of data points to keep in graph buffer (default: 500). Oldest values are automatically removed when limit is reached.")
+        self.buffer_size_input.setToolTip("Number of data points to keep in graph buffer (default: 5000). For array variables (600 points per update), buffer is automatically scaled to ~18,000 points to show ~30 array updates. Oldest values are automatically removed when limit is reached.")
         buffer_layout.addWidget(buffer_label)
         buffer_layout.addWidget(self.buffer_size_input)
         
@@ -599,8 +745,8 @@ class MainWindow(QMainWindow):
         var_select_layout.addWidget(self.trigger_var_combo)
         trigger_layout.addLayout(var_select_layout)
         
-        # Trigger button
-        self.trigger_btn = QPushButton("⚡ Trigger (500ms)")
+        # Trigger button - push button style (Trigger/Stop toggle)
+        self.trigger_btn = QPushButton("⚡ Trigger")
         self.trigger_btn.setCursor(Qt.PointingHandCursor)
         self.trigger_btn.setEnabled(False)  # Disabled until connected
         self.trigger_btn.setStyleSheet("""
@@ -616,8 +762,11 @@ class MainWindow(QMainWindow):
             QPushButton:pressed { background-color: #cc5500; }
             QPushButton:disabled { background-color: #555; color: #888; }
         """)
-        self.trigger_btn.clicked.connect(self.trigger_plc_pulse)
+        self.trigger_btn.clicked.connect(self.toggle_trigger)
         trigger_layout.addWidget(self.trigger_btn)
+        
+        # Track trigger state
+        self.trigger_active = False
         
         self.sidebar_layout.addLayout(trigger_layout)
 
@@ -821,6 +970,22 @@ class MainWindow(QMainWindow):
         self.speed_input.setEnabled(True)
         self.buffer_size_input.setEnabled(False)
         self.trigger_btn.setEnabled(True)  # Enable trigger when connected
+        # Reset trigger state on new connection
+        self.trigger_active = False
+        self.trigger_btn.setText("⚡ Trigger")
+        self.trigger_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #ff6b00; 
+                color: white; 
+                font-weight: bold; 
+                padding: 10px; 
+                border: none; 
+                border-radius: 4px; 
+            }
+            QPushButton:hover { background-color: #ff8800; }
+            QPushButton:pressed { background-color: #cc5500; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
 
     def disconnect_plc(self):
         """Disconnect from PLC and stop the communication thread"""
@@ -876,6 +1041,22 @@ class MainWindow(QMainWindow):
         self.speed_input.setEnabled(True)
         self.buffer_size_input.setEnabled(True)
         self.trigger_btn.setEnabled(False)  # Disable trigger when disconnected
+        # Reset trigger state on disconnect
+        self.trigger_active = False
+        self.trigger_btn.setText("⚡ Trigger")
+        self.trigger_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #ff6b00; 
+                color: white; 
+                font-weight: bold; 
+                padding: 10px; 
+                border: none; 
+                border-radius: 4px; 
+            }
+            QPushButton:hover { background-color: #ff8800; }
+            QPushButton:pressed { background-color: #cc5500; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
         
         # Clear latest values
         for key in self.latest_values:
@@ -897,6 +1078,21 @@ class MainWindow(QMainWindow):
             self.speed_input.setEnabled(True)
             self.buffer_size_input.setEnabled(False)
             self.trigger_btn.setEnabled(True)  # Enable trigger when connected
+            # Reset trigger state when connection is established
+            self.trigger_active = False
+            self.trigger_btn.setText("⚡ Trigger")
+            self.trigger_btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #ff6b00; 
+                    color: white; 
+                    font-weight: bold; 
+                    padding: 10px; 
+                    border: none; 
+                    border-radius: 4px; 
+                }
+                QPushButton:hover { background-color: #ff8800; }
+                QPushButton:pressed { background-color: #cc5500; }
+            """)
         elif status_type == "disconnected":
             self.comm_status["connected"] = False
             self.comm_status["last_message"] = message
@@ -907,6 +1103,22 @@ class MainWindow(QMainWindow):
             self.speed_input.setEnabled(True)
             self.trigger_btn.setEnabled(False)  # Disable trigger when disconnected
             self.buffer_size_input.setEnabled(True)
+            # Reset trigger state when disconnected
+            self.trigger_active = False
+            self.trigger_btn.setText("⚡ Trigger")
+            self.trigger_btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #ff6b00; 
+                    color: white; 
+                    font-weight: bold; 
+                    padding: 10px; 
+                    border: none; 
+                    border-radius: 4px; 
+                }
+                QPushButton:hover { background-color: #ff8800; }
+                QPushButton:pressed { background-color: #cc5500; }
+                QPushButton:disabled { background-color: #555; color: #888; }
+            """)
         elif status_type == "error":
             self.comm_status["last_error"] = message
             if "error_count" in details:
@@ -1141,6 +1353,21 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Buffer Size", "Please enter a valid positive integer for buffer size (e.g., 500). Using default: 500")
                 buffer_size = 500
             
+            # Check if any selected variables are arrays (they add 600 points per update)
+            # If arrays are present, scale buffer size to accommodate more array updates
+            has_arrays = any(var_name.startswith('arr') for var_name in var_names)
+            if has_arrays:
+                # Arrays add 600 points per communication cycle
+                # Scale buffer to hold at least 25-30 array updates for better visibility
+                # If user set 5000, that's ~8 array updates, scale to ~30 updates = 18,000 points
+                array_size = 600  # Standard array size
+                min_array_updates = 30  # Minimum number of array updates to keep in buffer
+                scaled_buffer_size = max(buffer_size, array_size * min_array_updates)
+                if scaled_buffer_size > buffer_size:
+                    # Inform user that buffer was scaled up for arrays
+                    logging.info(f"Buffer size scaled from {buffer_size} to {scaled_buffer_size} to accommodate array variables (600 points per update)")
+                    buffer_size = scaled_buffer_size
+            
             # Get current communication speed
             try:
                 comm_speed = float(self.speed_input.text())
@@ -1177,31 +1404,52 @@ class MainWindow(QMainWindow):
         if value is None:
             return
         
-        # Try to convert to numeric value, skip if not possible
-        try:
-            # For bool values, convert to int (0 or 1)
-            if isinstance(value, bool):
-                value = int(value)
-            else:
-                value = float(value)
-        except (ValueError, TypeError):
-            # Skip non-numeric values
-            return
-        
-        self.latest_values[variable_name] = value
-        for graph in self.graphs:
-            if variable_name in graph.variables or variable_name == graph.x_axis_source:
-                x_val = self.latest_values.get(graph.x_axis_source, 0.0) if graph.is_xy_plot else None
-                # Ensure x_val is numeric if provided
-                if x_val is not None:
-                    try:
-                        x_val = float(x_val)
-                    except (ValueError, TypeError):
-                        x_val = 0.0
-                graph.update_data(variable_name, value, x_value=x_val)
+        # Check if this is an array (list of values)
+        if isinstance(value, (list, tuple)):
+            # Handle arrays: plot all values at once, but display the latest value
+            if len(value) == 0:
+                return
+            
+            # Filter to get only numeric values
+            numeric_array = [v for v in value if isinstance(v, (int, float)) and not (isinstance(v, float) and (np.isnan(v) or np.isinf(v)))]
+            if len(numeric_array) == 0:
+                return
+            
+            # Store the latest value for display
+            latest_value = numeric_array[-1]
+            self.latest_values[variable_name] = latest_value
+            
+            # Update all graphs that use this variable
+            for graph in self.graphs:
+                if variable_name in graph.variables or variable_name == graph.x_axis_source:
+                    # Plot all array values at once
+                    graph.update_data_array(variable_name, numeric_array)
+        else:
+            # Handle scalar values (original behavior)
+            try:
+                # For bool values, convert to int (0 or 1)
+                if isinstance(value, bool):
+                    value = int(value)
+                else:
+                    value = float(value)
+            except (ValueError, TypeError):
+                # Skip non-numeric values
+                return
+            
+            self.latest_values[variable_name] = value
+            for graph in self.graphs:
+                if variable_name in graph.variables or variable_name == graph.x_axis_source:
+                    x_val = self.latest_values.get(graph.x_axis_source, 0.0) if graph.is_xy_plot else None
+                    # Ensure x_val is numeric if provided
+                    if x_val is not None:
+                        try:
+                            x_val = float(x_val)
+                        except (ValueError, TypeError):
+                            x_val = 0.0
+                    graph.update_data(variable_name, value, x_value=x_val)
 
-    def trigger_plc_pulse(self):
-        """Trigger a 500ms boolean pulse to the selected PLC variable"""
+    def toggle_trigger(self):
+        """Toggle trigger state: Trigger (True) or Stop (False)"""
         if not self.plc_thread or not self.plc_thread.is_alive():
             QMessageBox.warning(self, "Not Connected", "Please connect to PLC first.")
             return
@@ -1211,21 +1459,64 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Variable Selected", "Please select a boolean variable to trigger.")
             return
         
-        # Trigger the pulse in the PLC thread
         try:
-            self.plc_thread.trigger_bool_pulse(selected_var, pulse_duration=0.5)
-            # Show feedback
-            self.trigger_btn.setText("⚡ Triggering...")
-            self.trigger_btn.setEnabled(False)
-            
-            # Re-enable button after pulse completes (500ms + small buffer)
-            QTimer.singleShot(600, lambda: (
-                self.trigger_btn.setText("⚡ Trigger (500ms)"),
-                self.trigger_btn.setEnabled(True)
-            ))
+            if not self.trigger_active:
+                # Start trigger: set to True
+                if self.plc_thread.write_bool(selected_var, True):
+                    self.trigger_active = True
+                    self.trigger_btn.setText("⏹ Stop")
+                    self.trigger_btn.setStyleSheet("""
+                        QPushButton { 
+                            background-color: #cc3333; 
+                            color: white; 
+                            font-weight: bold; 
+                            padding: 10px; 
+                            border: none; 
+                            border-radius: 4px; 
+                        }
+                        QPushButton:hover { background-color: #ff4444; }
+                        QPushButton:pressed { background-color: #aa2222; }
+                    """)
+                    logging.info(f"Trigger activated for {selected_var}")
+                else:
+                    QMessageBox.warning(self, "Trigger Error", f"Failed to set {selected_var} to True")
+            else:
+                # Stop trigger: set to False
+                if self.plc_thread.write_bool(selected_var, False):
+                    self.trigger_active = False
+                    self.trigger_btn.setText("⚡ Trigger")
+                    self.trigger_btn.setStyleSheet("""
+                        QPushButton { 
+                            background-color: #ff6b00; 
+                            color: white; 
+                            font-weight: bold; 
+                            padding: 10px; 
+                            border: none; 
+                            border-radius: 4px; 
+                        }
+                        QPushButton:hover { background-color: #ff8800; }
+                        QPushButton:pressed { background-color: #cc5500; }
+                    """)
+                    logging.info(f"Trigger stopped for {selected_var}")
+                else:
+                    QMessageBox.warning(self, "Trigger Error", f"Failed to set {selected_var} to False")
         except Exception as e:
-            QMessageBox.warning(self, "Trigger Error", f"Failed to trigger pulse: {e}")
-            self.trigger_btn.setEnabled(True)
+            QMessageBox.warning(self, "Trigger Error", f"Failed to toggle trigger: {e}")
+            # Reset button state on error
+            self.trigger_active = False
+            self.trigger_btn.setText("⚡ Trigger")
+            self.trigger_btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #ff6b00; 
+                    color: white; 
+                    font-weight: bold; 
+                    padding: 10px; 
+                    border: none; 
+                    border-radius: 4px; 
+                }
+                QPushButton:hover { background-color: #ff8800; }
+                QPushButton:pressed { background-color: #cc5500; }
+            """)
 
     def closeEvent(self, event):
         if self.plc_thread and self.plc_thread.is_alive():
