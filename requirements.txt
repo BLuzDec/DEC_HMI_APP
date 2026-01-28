@@ -1,3 +1,17 @@
 PySide6
 pyqtgraph
 duckdb
+flask==3.0.3
+flask-cors==4.0.0
+waitress==3.0.0
+python-snap7
+asgiref==3.7.2
+python-dotenv==1.0.1
+watchdog==4.0.0
+cryptography==42.0.5
+werkzeug==3.0.2
+pandas==2.2.2
+plotly==5.21.0
+dash==2.16.1
+matplotlib==3.8.4
+opcua==0.98.13
