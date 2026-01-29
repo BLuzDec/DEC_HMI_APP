@@ -952,8 +952,19 @@ class MainWindow(QMainWindow):
             QPushButton:pressed { background-color: #aa2222; }
             QPushButton:disabled { background-color: #555; color: #888; }
         """)
+        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn.setCursor(Qt.PointingHandCursor)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setToolTip("Pause live updates. Values stay as-is so you can zoom, pan, or export.")
+        self.pause_btn.setStyleSheet("""
+            QPushButton { background-color: #FF9800; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 4px; }
+            QPushButton:hover { background-color: #FFB74D; }
+            QPushButton:pressed { background-color: #F57C00; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
         ip_connect_layout.addWidget(self.connect_btn)
         ip_connect_layout.addWidget(self.disconnect_btn)
+        ip_connect_layout.addWidget(self.pause_btn)
         
         # Speed input row
         speed_layout = QHBoxLayout()
@@ -1051,9 +1062,11 @@ class MainWindow(QMainWindow):
         """)
         self.trigger_btn.clicked.connect(self.toggle_trigger)
         trigger_layout.addWidget(self.trigger_btn)
+        self.pause_btn.clicked.connect(self.toggle_pause)
         
-        # Track trigger state
+        # Track trigger and pause state
         self.trigger_active = False
+        self.paused = False
         
         online_layout.addLayout(trigger_layout)
         self.sidebar_layout.addWidget(self.online_panel)
@@ -1569,9 +1582,18 @@ class MainWindow(QMainWindow):
         self.speed_input.setEnabled(True)
         self.buffer_size_input.setEnabled(False)
         self.trigger_btn.setEnabled(True)  # Enable trigger when connected
-        # Reset trigger state on new connection
+        self.pause_btn.setEnabled(True)
+        # Reset trigger and pause state on new connection
         self.trigger_active = False
+        self.paused = False
         self.trigger_btn.setText("⚡ Trigger")
+        self.pause_btn.setText("⏸ Pause")
+        self.pause_btn.setStyleSheet("""
+            QPushButton { background-color: #FF9800; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 4px; }
+            QPushButton:hover { background-color: #FFB74D; }
+            QPushButton:pressed { background-color: #F57C00; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
         self.trigger_btn.setStyleSheet("""
             QPushButton { 
                 background-color: #ff6b00; 
@@ -1616,6 +1638,7 @@ class MainWindow(QMainWindow):
             self.browse_exchange_btn.setEnabled(True)
             self.browse_recipe_btn.setEnabled(True)
             self.trigger_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
             QMessageBox.information(self, "Not Connected", "No active PLC, ADS, or simulation to disconnect.")
             return
         
@@ -1651,8 +1674,11 @@ class MainWindow(QMainWindow):
         self.browse_exchange_btn.setEnabled(True)
         self.browse_recipe_btn.setEnabled(True)
         self.trigger_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
         self.trigger_active = False
+        self.paused = False
         self.trigger_btn.setText("⚡ Trigger")
+        self.pause_btn.setText("⏸ Pause")
         self.trigger_btn.setStyleSheet("""
             QPushButton { 
                 background-color: #ff6b00; 
@@ -1664,6 +1690,12 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover { background-color: #ff8800; }
             QPushButton:pressed { background-color: #cc5500; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
+        self.pause_btn.setStyleSheet("""
+            QPushButton { background-color: #FF9800; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 4px; }
+            QPushButton:hover { background-color: #FFB74D; }
+            QPushButton:pressed { background-color: #F57C00; }
             QPushButton:disabled { background-color: #555; color: #888; }
         """)
         
@@ -1687,8 +1719,11 @@ class MainWindow(QMainWindow):
             self.speed_input.setEnabled(True)
             self.buffer_size_input.setEnabled(False)
             self.trigger_btn.setEnabled(True)
+            self.pause_btn.setEnabled(True)
             self.trigger_active = False
+            self.paused = False
             self.trigger_btn.setText("⚡ Trigger")
+            self.pause_btn.setText("⏸ Pause")
             self.trigger_btn.setStyleSheet("""
                 QPushButton { 
                     background-color: #ff6b00; 
@@ -1713,9 +1748,12 @@ class MainWindow(QMainWindow):
             self.speed_input.setEnabled(True)
             self.buffer_size_input.setEnabled(False)
             self.trigger_btn.setEnabled(True)  # Enable trigger when connected
-            # Reset trigger state when connection is established
+            self.pause_btn.setEnabled(True)
+            # Reset trigger and pause state when connection is established
             self.trigger_active = False
+            self.paused = False
             self.trigger_btn.setText("⚡ Trigger")
+            self.pause_btn.setText("⏸ Pause")
             self.trigger_btn.setStyleSheet("""
                 QPushButton { 
                     background-color: #ff6b00; 
@@ -1742,9 +1780,12 @@ class MainWindow(QMainWindow):
             self.browse_exchange_btn.setEnabled(True)
             self.browse_recipe_btn.setEnabled(True)
             self.trigger_btn.setEnabled(False)
-            # Reset trigger state when disconnected
+            self.pause_btn.setEnabled(False)
+            # Reset trigger and pause state when disconnected
             self.trigger_active = False
+            self.paused = False
             self.trigger_btn.setText("⚡ Trigger")
+            self.pause_btn.setText("⏸ Pause")
             self.trigger_btn.setStyleSheet("""
                 QPushButton { 
                     background-color: #ff6b00; 
@@ -2134,6 +2175,9 @@ class MainWindow(QMainWindow):
         # Skip None values to prevent errors
         if value is None:
             return
+        # When paused, keep all values as they are and do not update graphs
+        if self.paused:
+            return
         
         # Check if this is an array (list of values)
         if isinstance(value, (list, tuple)):
@@ -2178,6 +2222,26 @@ class MainWindow(QMainWindow):
                         except (ValueError, TypeError):
                             x_val = 0.0
                     graph.update_data(variable_name, value, x_value=x_val)
+
+    def toggle_pause(self):
+        """Toggle pause: freeze current values so user can zoom, pan, or export without new data updating the graphs."""
+        if not self.pause_btn.isEnabled():
+            return
+        self.paused = not self.paused
+        if self.paused:
+            self.pause_btn.setText("▶ Resume")
+            self.pause_btn.setStyleSheet("""
+                QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 4px; }
+                QPushButton:hover { background-color: #66BB6A; }
+                QPushButton:pressed { background-color: #388E3C; }
+            """)
+        else:
+            self.pause_btn.setText("⏸ Pause")
+            self.pause_btn.setStyleSheet("""
+                QPushButton { background-color: #FF9800; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 4px; }
+                QPushButton:hover { background-color: #FFB74D; }
+                QPushButton:pressed { background-color: #F57C00; }
+            """)
 
     def toggle_trigger(self):
         """Toggle trigger state: Trigger (True) or Stop (False). Only Snap7 supports trigger."""
