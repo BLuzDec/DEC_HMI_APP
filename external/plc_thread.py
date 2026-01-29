@@ -25,6 +25,10 @@ class PLCThread(threading.Thread):
         self._comm_speed_lock = threading.Lock()  # Lock for thread-safe speed updates
         self._write_lock = threading.Lock()  # Lock for thread-safe writes
         
+        # Time between last two successfully received packages (ms) - actual cycle time
+        self._last_success_read_time = None
+        self._last_interval_ms = None
+        
         # Track last array read time for 1-second interval
         self.last_array_read_time = {}
         
@@ -264,6 +268,12 @@ class PLCThread(threading.Thread):
                         continue
                 
                 self.read_count += 1
+                # Measure actual time between this and previous received package
+                now = time.time()
+                if self._last_success_read_time is not None:
+                    self._last_interval_ms = (now - self._last_success_read_time) * 1000
+                self._last_success_read_time = now
+                
                 self.log_data_to_duckdb(current_values)
                 
                 dose_number = current_values.get('Dose_number')
@@ -277,10 +287,15 @@ class PLCThread(threading.Thread):
                 
                 # Update stats every 100 reads
                 if self.read_count % 100 == 0:
-                    self._emit_status("stats", "Communication active", {
+                    details = {
                         "read_count": self.read_count,
                         "error_count": self.error_count
-                    })
+                    }
+                    if self._last_interval_ms is not None:
+                        details["last_interval_ms"] = self._last_interval_ms
+                    with self._comm_speed_lock:
+                        details["requested_interval_ms"] = self.comm_speed * 1000
+                    self._emit_status("stats", "Communication active", details)
                 
                 # Get current speed value (thread-safe)
                 with self._comm_speed_lock:

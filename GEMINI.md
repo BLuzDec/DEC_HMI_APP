@@ -40,17 +40,6 @@ I am an Expert Automation Engineer striving for absolute software mastery.
     - If I use deprecated methods, flag them as "Technical Debt."
 
 # ------------------------------------------------------------------------------
-# 4. CONTEXT SHORTCUTS
-# ------------------------------------------------------------------------------
-CONTEXT_MAP:
-  "logic": "./src"
-  "core": "./src"
-  "firmware": "./src/firmware"    # Adjusted for your embedded work
-  "plc": "./src/plc_integration"  # Adjusted for your OT work
-  "backend": "./src/server"
-  "config": ["./package.json", "./tsconfig.json", "./.env.example"]
-
-# ------------------------------------------------------------------------------
 # 5. AUTOMATED CHECKS
 # ------------------------------------------------------------------------------
 # Whenever I ask you to review code, ALWAYS check for:

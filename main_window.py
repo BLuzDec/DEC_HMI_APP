@@ -2,18 +2,23 @@ import sys
 import json
 import os
 import logging
+
+import duckdb
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QListWidget, QPushButton, QSplitter, QScrollArea,
                                QAbstractItemView, QLabel, QApplication, QFrame,
                                QDialog, QComboBox, QDialogButtonBox, QFormLayout,
-                               QCheckBox, QLineEdit, QMessageBox)
-from PySide6.QtCore import Qt, Slot, Signal, QTimer, QTimer
+                               QCheckBox, QLineEdit, QMessageBox, QFileDialog,
+                               QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView)
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings
 from PySide6.QtGui import QPalette, QColor
 import pyqtgraph as pg
 from collections import deque
 import numpy as np
 from external.plc_thread import PLCThread
+from external.plc_ads_thread import PLCADSThread
+from external.plc_simulator import PLCSimulator
 
 class GraphConfigDialog(QDialog):
     """Dialog to configure graph parameters before creation."""
@@ -51,7 +56,7 @@ class GraphConfigDialog(QDialog):
 
 class RangeConfigDialog(QDialog):
     """Dialog to configure Min/Max ranges for axes."""
-    def __init__(self, current_settings, has_dual_y=False, show_recipes=True, parent=None):
+    def __init__(self, current_settings, has_dual_y=False, show_recipes=True, has_two_variables=False, show_delta=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Axis Range Settings")
         self.setModal(True)
@@ -116,6 +121,19 @@ class RangeConfigDialog(QDialog):
         recipe_layout.addStretch()
         layout.addLayout(recipe_layout)
         
+        # Delta on graph: only when exactly 2 variables
+        self.has_two_variables = has_two_variables
+        if has_two_variables:
+            delta_layout = QHBoxLayout()
+            self.chk_show_delta = QCheckBox("Show delta (var2 − var1) on graph")
+            self.chk_show_delta.setChecked(show_delta)
+            self.chk_show_delta.setStyleSheet("color: white; padding: 5px;")
+            delta_layout.addWidget(self.chk_show_delta)
+            delta_layout.addStretch()
+            layout.addLayout(delta_layout)
+        else:
+            self.chk_show_delta = None
+        
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -125,7 +143,8 @@ class RangeConfigDialog(QDialog):
         settings = {
             "x": {"auto": self.chk_x_auto.isChecked(), "min": self.spin_x_min.value(), "max": self.spin_x_max.value()},
             "y1": {"auto": self.chk_y1_auto.isChecked(), "min": self.spin_y1_min.value(), "max": self.spin_y1_max.value()},
-            "show_recipes": self.chk_show_recipes.isChecked()
+            "show_recipes": self.chk_show_recipes.isChecked(),
+            "show_delta": self.chk_show_delta.isChecked() if self.chk_show_delta is not None else False
         }
         if self.has_dual_y:
              settings["y2"] = {"auto": self.chk_y2_auto.isChecked(), "min": self.spin_y2_min.value(), "max": self.spin_y2_max.value()}
@@ -148,6 +167,7 @@ class DynamicPlotWidget(QWidget):
         self.latest_values_cache = latest_values_cache if latest_values_cache else {}
         self.variable_metadata = variable_metadata if variable_metadata else {}
         self.show_recipes_in_tooltip = True  # Default to showing recipes
+        self.show_delta_on_graph = False  # When True and 2 variables, plot delta (var2 - var1)
         self.comm_speed = comm_speed  # Communication speed for time calculation
         
         # Track start time for time-based graphs
@@ -185,6 +205,17 @@ class DynamicPlotWidget(QWidget):
         """)
         self.btn_settings.clicked.connect(self.open_range_settings)
         self.header_layout.addWidget(self.btn_settings)
+
+        self.btn_export_csv = QPushButton("📥")
+        self.btn_export_csv.setFixedSize(24, 24)
+        self.btn_export_csv.setCursor(Qt.PointingHandCursor)
+        self.btn_export_csv.setToolTip("Export graph data to CSV (semicolon-separated)")
+        self.btn_export_csv.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #888; border: 1px solid #444; border-radius: 4px; }
+            QPushButton:hover { background-color: #444; color: white; }
+        """)
+        self.btn_export_csv.clicked.connect(self.export_graph_data_to_csv)
+        self.header_layout.addWidget(self.btn_export_csv)
 
         self.plot_widget = pg.PlotWidget()
         self.layout.addWidget(self.plot_widget)
@@ -350,6 +381,7 @@ class DynamicPlotWidget(QWidget):
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
 
     def _setup_single_axis(self):
+        self.line_delta = None  # No delta line for single variable or XY
         for i, var in enumerate(self.variables):
             color = self.colors[i % len(self.colors)]
             self._add_variable(var, color, self.plot_widget.plotItem)
@@ -372,6 +404,10 @@ class DynamicPlotWidget(QWidget):
         p1.getAxis('right').setPen(color2)
         p1.getAxis('right').setTextPen(color2)
         self._add_variable(var2, color2, self.p2)
+        # Delta line (var2 - var1) on left axis, shown only when "Show delta" is enabled
+        self.line_delta = pg.PlotCurveItem(name="Delta", pen=pg.mkPen('#FF9800', width=2), antialias=True)
+        p1.addItem(self.line_delta)
+        self.line_delta.hide()
         
         def updateViews():
             self.p2.setGeometry(p1.vb.sceneBoundingRect())
@@ -407,6 +443,8 @@ class DynamicPlotWidget(QWidget):
                 self.range_settings, 
                 has_dual_y=(self.p2 is not None),
                 show_recipes=self.show_recipes_in_tooltip,
+                has_two_variables=(len(self.variables) == 2),
+                show_delta=getattr(self, "show_delta_on_graph", False),
                 parent=parent_window
             )
             dialog.setModal(True)
@@ -437,10 +475,68 @@ class DynamicPlotWidget(QWidget):
                 # Update recipe display setting
                 if "show_recipes" in settings:
                     self.show_recipes_in_tooltip = settings["show_recipes"]
+                if "show_delta" in settings and len(self.variables) == 2:
+                    self.show_delta_on_graph = settings["show_delta"]
+                    self._update_delta_line()
         except Exception as e:
             print(f"Error opening range settings dialog: {e}")
             import traceback
             traceback.print_exc()
+
+    def export_graph_data_to_csv(self):
+        """Export current graph buffer data to CSV with semicolon separator. Format: index;var1;var2;..."""
+        path, _ = QFileDialog.getSaveFileName(self, "Export graph data", "", "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            # Build rows: common length across all variable buffers
+            buffers = [list(self.buffers_y.get(v, [])) for v in self.variables]
+            if not buffers:
+                return
+            n = max(len(b) for b in buffers)
+            if n == 0:
+                return
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                header = "index;" + ";".join(self.variables)
+                f.write(header + "\n")
+                for i in range(n):
+                    row = [str(i)]
+                    for v in self.variables:
+                        buf = self.buffers_y.get(v, [])
+                        val = buf[i] if i < len(buf) else ""
+                        row.append(str(val) if val != "" and val is not None else "")
+                    f.write(";".join(row) + "\n")
+        except Exception as e:
+            logging.warning(f"Export CSV failed: {e}")
+            QMessageBox.warning(self, "Export failed", str(e))
+
+    def _update_delta_line(self):
+        """Update or show/hide the delta line (var2 - var1) when exactly 2 variables."""
+        if getattr(self, "line_delta", None) is None or len(self.variables) != 2:
+            return
+        if not self.show_delta_on_graph:
+            self.line_delta.hide()
+            return
+        v1, v2 = self.variables[0], self.variables[1]
+        b1 = list(self.buffers_y.get(v1, []))
+        b2 = list(self.buffers_y.get(v2, []))
+        n = min(len(b1), len(b2))
+        if n == 0:
+            self.line_delta.hide()
+            return
+        delta = []
+        for i in range(n):
+            try:
+                a, b = float(b1[i]), float(b2[i])
+                if not (np.isnan(a) or np.isnan(b) or np.isinf(a) or np.isinf(b)):
+                    delta.append(b - a)
+            except (ValueError, TypeError):
+                continue
+        if delta:
+            self.line_delta.setData(delta)
+            self.line_delta.show()
+        else:
+            self.line_delta.hide()
 
     def update_data(self, var_name, y_value, x_value=None):
         if var_name not in self.variables: return
@@ -508,6 +604,62 @@ class DynamicPlotWidget(QWidget):
         txt = f"{var_name}: {y_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
         self.value_labels[var_name].setText(txt)
         self._update_time_plot_x_range()
+        if len(self.variables) == 2:
+            self._update_delta_line()
+
+    def set_static_data(self, x_data, y_series):
+        """Load static (offline) data once: x_data = list or None (use index), y_series = {var_name: [y values]}."""
+        n = 0
+        for var_name in self.variables:
+            if var_name not in y_series:
+                continue
+            ys = y_series[var_name]
+            clean = []
+            for v in ys:
+                try:
+                    f = float(v)
+                    if not (np.isnan(f) or np.isinf(f)):
+                        clean.append(f)
+                except (ValueError, TypeError):
+                    pass
+            self.buffers_y[var_name] = deque(clean, maxlen=self.buffer_size)
+            n = max(n, len(clean))
+        if n == 0:
+            return
+        if x_data is None or len(x_data) < n:
+            x_list = list(range(n))
+        else:
+            x_list = []
+            for v in x_data[:n]:
+                try:
+                    f = float(v)
+                    if not (np.isnan(f) or np.isinf(f)):
+                        x_list.append(f)
+                except (ValueError, TypeError):
+                    pass
+            if len(x_list) != n:
+                x_list = list(range(n))
+        for var_name in self.variables:
+            if var_name not in self.buffers_y or var_name not in self.lines:
+                continue
+            y_list = list(self.buffers_y[var_name])
+            min_len = min(len(x_list), len(y_list))
+            if min_len == 0:
+                continue
+            if self.is_xy_plot:
+                self.buffers_x[var_name] = deque(x_list[:min_len], maxlen=self.buffer_size)
+                self.lines[var_name].setData(x_list[:min_len], y_list[:min_len])
+            else:
+                self.lines[var_name].setData(y_list[:min_len])
+            if y_list:
+                last_val = y_list[-1]
+                data = [d for d in y_list if isinstance(d, (int, float)) and not np.isnan(d)]
+                min_v = min(data) if data else 0.0
+                max_v = max(data) if data else 0.0
+                txt = f"{var_name}: {last_val:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
+                self.value_labels[var_name].setText(txt)
+        if len(self.variables) == 2:
+            self._update_delta_line()
 
     def update_data_array(self, var_name, array_values):
         """Add all array values at once to the graph.
@@ -607,6 +759,8 @@ class DynamicPlotWidget(QWidget):
         txt = f"{var_name}: {latest_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
         self.value_labels[var_name].setText(txt)
         self._update_time_plot_x_range()
+        if len(self.variables) == 2:
+            self._update_delta_line()
 
     def mouse_moved(self, evt):
         pos = evt[0]
@@ -652,6 +806,20 @@ class DynamicPlotWidget(QWidget):
                     color = self.lines[var].opts['pen'].color().name()
                     html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_val:.2f}</span><br/>"
 
+            # Delta (difference) between the two variables, only when exactly 2 variables
+            if len(self.variables) == 2:
+                y1_data = self.buffers_y.get(self.variables[0])
+                y2_data = self.buffers_y.get(self.variables[1])
+                if y1_data and y2_data and idx < len(y1_data) and idx < len(y2_data):
+                    try:
+                        v1, v2 = float(y1_data[idx]), float(y2_data[idx])
+                        if not (np.isnan(v1) or np.isnan(v2)):
+                            delta = v2 - v1
+                            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+                            html += f"<span style='color: #FF9800; font-weight: bold;'>Delta ({self.variables[1]} − {self.variables[0]}): {delta:.2f}</span><br/>"
+                    except (ValueError, TypeError):
+                        pass
+
             # Show recipe parameters only if enabled
             if self.show_recipes_in_tooltip and self.recipe_params:
                 html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
@@ -683,6 +851,9 @@ class MainWindow(QMainWindow):
         self.all_variables = []
         self.variable_metadata = {}  # Store min/max from CSV files
         self.recipe_params = []  # Will be loaded from recipe_variables.csv
+        _ext = os.path.join(os.path.dirname(__file__), "external")
+        self.exchange_variables_path = os.path.join(_ext, "exchange_variables.csv")
+        self.recipe_variables_path = os.path.join(_ext, "recipe_variables.csv")
         self.apply_theme()
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
@@ -698,13 +869,73 @@ class MainWindow(QMainWindow):
         self.sidebar_layout = QVBoxLayout(self.sidebar)
         self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
 
+        # Data mode: Online (real-time) vs Offline (CSV → DuckDB)
+        data_mode_layout = QHBoxLayout()
+        data_mode_label = QLabel("Data:")
+        data_mode_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        data_mode_label.setFixedWidth(50)
+        self.data_mode_combo = QComboBox()
+        self.data_mode_combo.addItems(["Online Data", "Offline Data"])
+        self.data_mode_combo.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.data_mode_combo.setToolTip("Online: real-time PLC/ADS/Simulation. Offline: load a CSV into DuckDB and plot (faster for many parameters).")
+        self.data_mode_combo.currentTextChanged.connect(self.on_data_mode_changed)
+        data_mode_layout.addWidget(data_mode_label)
+        data_mode_layout.addWidget(self.data_mode_combo)
+        self.sidebar_layout.addLayout(data_mode_layout)
+
+        # Online panel: connection UI (shown when Online Data)
+        self.online_panel = QWidget()
+        online_layout = QVBoxLayout(self.online_panel)
+        online_layout.setContentsMargins(0, 5, 0, 0)
+        online_layout.setSpacing(0)
+
         # Connection UI
         self.connection_layout = QVBoxLayout()
         
-        # IP and Connect/Disconnect row
-        ip_connect_layout = QHBoxLayout()
+        # Client Device Type dropdown (above Connect/Disconnect)
+        device_type_layout = QHBoxLayout()
+        device_type_label = QLabel("Client:")
+        device_type_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        device_type_label.setFixedWidth(60)
+        self.device_type_combo = QComboBox()
+        self.device_type_combo.addItems(["Snap7", "ADS", "Simulation"])
+        self.device_type_combo.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.device_type_combo.setToolTip("Snap7: Siemens S7 (e.g. S7-1500). ADS: Beckhoff (EtherCAT). Simulation: CSV-based simulator (no address).")
+        self.device_type_combo.currentTextChanged.connect(self.on_device_type_changed)
+        device_type_layout.addWidget(device_type_label)
+        device_type_layout.addWidget(self.device_type_combo)
+        self.connection_layout.addLayout(device_type_layout)
+        
+        # Address row (IP for Snap7, Target for ADS; hidden for Simulation)
+        self.address_row = QWidget()
+        address_row_layout = QHBoxLayout(self.address_row)
+        address_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.address_label = QLabel("IP:")
+        self.address_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.address_label.setFixedWidth(60)
         self.ip_input = QLineEdit("192.168.0.20")
         self.ip_input.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.ip_input.setPlaceholderText("192.168.0.20")
+        address_row_layout.addWidget(self.address_label)
+        address_row_layout.addWidget(self.ip_input)
+        self.connection_layout.addWidget(self.address_row)
+        # PC IP row (ADS only): your PC's IP/AmsNetId used for the route / local address
+        self.pc_ip_row = QWidget()
+        pc_ip_layout = QHBoxLayout(self.pc_ip_row)
+        pc_ip_layout.setContentsMargins(0, 0, 0, 0)
+        self.pc_ip_label = QLabel("PC IP:")
+        self.pc_ip_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.pc_ip_label.setFixedWidth(60)
+        self.pc_ip_input = QLineEdit("")
+        self.pc_ip_input.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.pc_ip_input.setPlaceholderText("192.168.1.100 or 192.168.1.100.1.1")
+        self.pc_ip_input.setToolTip("Your PC's IP (or AmsNetId). This is the address used for the ADS route on the PLC.")
+        pc_ip_layout.addWidget(self.pc_ip_label)
+        pc_ip_layout.addWidget(self.pc_ip_input)
+        self.connection_layout.addWidget(self.pc_ip_row)
+        self.pc_ip_row.setVisible(False)
+        # Connect/Disconnect row
+        ip_connect_layout = QHBoxLayout()
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setCursor(Qt.PointingHandCursor)
         self.connect_btn.setStyleSheet("""
@@ -721,7 +952,6 @@ class MainWindow(QMainWindow):
             QPushButton:pressed { background-color: #aa2222; }
             QPushButton:disabled { background-color: #555; color: #888; }
         """)
-        ip_connect_layout.addWidget(self.ip_input)
         ip_connect_layout.addWidget(self.connect_btn)
         ip_connect_layout.addWidget(self.disconnect_btn)
         
@@ -747,10 +977,41 @@ class MainWindow(QMainWindow):
         buffer_layout.addWidget(buffer_label)
         buffer_layout.addWidget(self.buffer_size_input)
         
+        # Variable files: choose exchange and recipe CSVs (any name, browse before connecting)
+        vars_label = QLabel("Variable files:")
+        vars_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold; margin-top: 6px;")
+        self.connection_layout.addWidget(vars_label)
+        exchange_row = QHBoxLayout()
+        exchange_row.setSpacing(4)
+        self.exchange_path_edit = QLineEdit()
+        self.exchange_path_edit.setReadOnly(True)
+        self.exchange_path_edit.setStyleSheet("background-color: #333; color: #aaa; border: 1px solid #555; padding: 4px; font-size: 10px;")
+        self.exchange_path_edit.setPlaceholderText("Exchange variables CSV (browse)")
+        self.browse_exchange_btn = QPushButton("Exchange…")
+        self.browse_exchange_btn.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 4px;")
+        self.browse_exchange_btn.setToolTip("Choose CSV with variable names (column 'Variable'). Use different files for Snap7 vs ADS or between PLCs.")
+        self.browse_exchange_btn.clicked.connect(self.browse_exchange_variables)
+        exchange_row.addWidget(self.exchange_path_edit)
+        exchange_row.addWidget(self.browse_exchange_btn)
+        self.connection_layout.addLayout(exchange_row)
+        recipe_row = QHBoxLayout()
+        recipe_row.setSpacing(4)
+        self.recipe_path_edit = QLineEdit()
+        self.recipe_path_edit.setReadOnly(True)
+        self.recipe_path_edit.setStyleSheet("background-color: #333; color: #aaa; border: 1px solid #555; padding: 4px; font-size: 10px;")
+        self.recipe_path_edit.setPlaceholderText("Recipe variables CSV (browse)")
+        self.browse_recipe_btn = QPushButton("Recipes…")
+        self.browse_recipe_btn.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 4px;")
+        self.browse_recipe_btn.setToolTip("Choose CSV with recipe variable names. Optional; use any filename.")
+        self.browse_recipe_btn.clicked.connect(self.browse_recipe_variables)
+        recipe_row.addWidget(self.recipe_path_edit)
+        recipe_row.addWidget(self.browse_recipe_btn)
+        self.connection_layout.addLayout(recipe_row)
+        
         self.connection_layout.addLayout(ip_connect_layout)
         self.connection_layout.addLayout(speed_layout)
         self.connection_layout.addLayout(buffer_layout)
-        self.sidebar_layout.addLayout(self.connection_layout)
+        online_layout.addLayout(self.connection_layout)
 
         # PLC Trigger Button Section
         trigger_label = QLabel("PLC TRIGGER")
@@ -794,7 +1055,42 @@ class MainWindow(QMainWindow):
         # Track trigger state
         self.trigger_active = False
         
-        self.sidebar_layout.addLayout(trigger_layout)
+        online_layout.addLayout(trigger_layout)
+        self.sidebar_layout.addWidget(self.online_panel)
+
+        # Offline panel: Load CSV → DuckDB + CSV format info (shown when Offline Data)
+        self.offline_panel = QWidget()
+        offline_main = QHBoxLayout(self.offline_panel)
+        offline_main.setContentsMargins(0, 5, 0, 0)
+        offline_main.setSpacing(8)
+        # Left: Load button and path
+        offline_left = QVBoxLayout()
+        offline_left.setSpacing(4)
+        self.offline_load_btn = QPushButton("Load CSV → DuckDB")
+        self.offline_load_btn.setCursor(Qt.PointingHandCursor)
+        self.offline_load_btn.setStyleSheet("""
+            QPushButton { background-color: #007ACC; color: white; font-weight: bold; padding: 8px; border: none; border-radius: 4px; }
+            QPushButton:hover { background-color: #0098FF; }
+            QPushButton:pressed { background-color: #005A9E; }
+        """)
+        self.offline_load_btn.setToolTip("Load a CSV file into DuckDB for fast querying and plotting. Use for large files or many parameters instead of reading CSV repeatedly.")
+        self.offline_load_btn.clicked.connect(self.load_offline_csv)
+        offline_left.addWidget(self.offline_load_btn)
+        self.offline_path_label = QLabel("No file loaded")
+        self.offline_path_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.offline_path_label.setWordWrap(True)
+        offline_left.addWidget(self.offline_path_label)
+        offline_main.addLayout(offline_left)
+        # Right: CSV format info and example table
+        self.offline_info_widget = self._create_offline_csv_info_widget()
+        offline_main.addWidget(self.offline_info_widget, 1)
+        self.offline_panel.setVisible(False)
+        self.sidebar_layout.addWidget(self.offline_panel)
+
+        # Offline state: DuckDB connection and column list (set when CSV loaded)
+        self.offline_db = None
+        self.offline_csv_path = None
+        self.offline_columns = []
 
         self.lbl_vars = QLabel("DATA POINTS")
         self.lbl_vars.setStyleSheet("font-weight: bold; font-size: 12px; color: #888; margin-bottom: 5px; margin-top: 10px;")
@@ -817,14 +1113,14 @@ class MainWindow(QMainWindow):
         """)
         self.btn_add_graph.clicked.connect(self.add_new_graph)
         self.sidebar_layout.addWidget(self.btn_add_graph)
-        
+
         # Initialize communication status before creating panel
         self.setup_comm_info_panel()
-        
+
         # Communication Info Panel (collapsible)
         self.comm_info_panel = self.create_comm_info_panel()
         self.sidebar_layout.addWidget(self.comm_info_panel)
-        
+
         self.splitter.addWidget(self.sidebar)
 
         self.scroll_area = QScrollArea()
@@ -834,19 +1130,21 @@ class MainWindow(QMainWindow):
         self.scroll_content.setStyleSheet("background-color: #1e1e1e;")
         self.graphs_layout = QVBoxLayout(self.scroll_content)
         self.graphs_layout.setContentsMargins(10, 10, 10, 10)
-        
+
         self.graph_splitter = QSplitter(Qt.Vertical)
         self.graph_splitter.setStyleSheet("QSplitter::handle { background-color: #3e3e42; }")
         self.graph_splitter.setHandleWidth(4)
 
         self.graphs_layout.addWidget(self.graph_splitter)
-        
+
         self.scroll_area.setWidget(self.scroll_content)
         self.splitter.addWidget(self.scroll_area)
         self.splitter.setSizes([300, 980])
 
         self.graphs = []
         self.plc_thread = None
+        self.ads_thread = None
+        self.simulator_thread = None
         self.load_variables()
 
         self.connect_btn.clicked.connect(self.start_plc_thread)
@@ -854,16 +1152,148 @@ class MainWindow(QMainWindow):
         self.data_signal.connect(self.update_plot)
         self.status_signal.connect(self.update_comm_status)
         self.speed_input.editingFinished.connect(self.update_speed_while_connected)
+        self.on_device_type_changed(self.device_type_combo.currentText())
+        self.on_data_mode_changed(self.data_mode_combo.currentText())
+        self._update_variable_path_display()
+        self._load_last_config()
+
+    def _load_last_config(self):
+        """Restore last saved connection config (device type, IPs, variable paths) from cache."""
+        s = QSettings("ProAutomation", "Studio")
+        device = s.value("device_type")
+        if device and device in ("Snap7", "ADS", "Simulation"):
+            idx = self.device_type_combo.findText(device)
+            if idx >= 0:
+                self.device_type_combo.setCurrentIndex(idx)
+        ip = s.value("ip_address")
+        if ip:
+            self.ip_input.setText(ip)
+        pc_ip = s.value("pc_ip")
+        if pc_ip:
+            self.pc_ip_input.setText(pc_ip)
+        ex = s.value("exchange_path")
+        if ex:
+            self.exchange_variables_path = ex
+        rec = s.value("recipe_path")
+        if rec:
+            self.recipe_variables_path = rec
+        speed = s.value("speed")
+        if speed:
+            self.speed_input.setText(speed)
+        buf = s.value("buffer_size")
+        if buf:
+            self.buffer_size_input.setText(buf)
+        self.on_device_type_changed(self.device_type_combo.currentText())
+        self._update_variable_path_display()
+        self.load_variables()
+
+    def _save_last_config(self):
+        """Save current connection config so next run shows the latest (e.g. ADS, IPs, variable paths)."""
+        s = QSettings("ProAutomation", "Studio")
+        s.setValue("device_type", self.device_type_combo.currentText())
+        s.setValue("ip_address", self.ip_input.text().strip())
+        s.setValue("pc_ip", self.pc_ip_input.text().strip())
+        s.setValue("exchange_path", self.exchange_variables_path or "")
+        s.setValue("recipe_path", self.recipe_variables_path or "")
+        s.setValue("speed", self.speed_input.text().strip())
+        s.setValue("buffer_size", self.buffer_size_input.text().strip())
+        s.sync()
+
+    def _update_variable_path_display(self):
+        """Refresh the exchange/recipe CSV path display (basename or full path)."""
+        self.exchange_path_edit.setText(self.exchange_variables_path or "")
+        self.exchange_path_edit.setToolTip(self.exchange_variables_path or "No file chosen")
+        self.recipe_path_edit.setText(self.recipe_variables_path or "")
+        self.recipe_path_edit.setToolTip(self.recipe_variables_path or "No file chosen")
+
+    def browse_exchange_variables(self):
+        """Let user choose exchange variables CSV (any name); reload variable list."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select exchange variables CSV", self.exchange_variables_path or "",
+            "CSV (*.csv);;All files (*)"
+        )
+        if path:
+            self.exchange_variables_path = os.path.normpath(path)
+            self._update_variable_path_display()
+            self.load_variables()
+
+    def browse_recipe_variables(self):
+        """Let user choose recipe variables CSV (any name); reload variable list."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select recipe variables CSV", self.recipe_variables_path or "",
+            "CSV (*.csv);;All files (*)"
+        )
+        if path:
+            self.recipe_variables_path = os.path.normpath(path)
+            self._update_variable_path_display()
+            self.load_variables()
+
+    def _create_offline_csv_info_widget(self):
+        """Create the info widget shown when Offline Data: CSV format rules and example table."""
+        group = QFrame()
+        group.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d30;
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 6px;
+            }
+        """)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        title = QLabel("📋 CSV format")
+        title.setStyleSheet("font-weight: bold; color: #ccc; font-size: 11px;")
+        layout.addWidget(title)
+        desc = QLabel(
+            "• First row = column headers (any names)\n"
+            "• Numeric columns for plotting\n"
+            "• Comma or semicolon separated\n"
+            "• One column can be X-axis (time/index)"
+        )
+        desc.setStyleSheet("color: #aaa; font-size: 10px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        example_label = QLabel("Example:")
+        example_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(example_label)
+        table = QTableWidget(4, 3)
+        table.setHorizontalHeaderLabels(["Time", "Pressure", "Temperature"])
+        table.setStyleSheet("""
+            QTableWidget { background-color: #1e1e1e; color: #ccc; gridline-color: #3e3e42; }
+            QTableWidget::item { padding: 2px; }
+            QHeaderView::section { background-color: #3e3e42; color: #ccc; padding: 4px; }
+        """)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setMaximumHeight(120)
+        example_data = [
+            ("0", "1.2", "25.3"),
+            ("0.1", "1.3", "25.5"),
+            ("0.2", "1.1", "26.0"),
+            ("0.3", "1.4", "25.8"),
+        ]
+        for row, row_data in enumerate(example_data):
+            for col, val in enumerate(row_data):
+                item = QTableWidgetItem(val)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                table.setItem(row, col, item)
+        layout.addWidget(table)
+        return group
 
     def setup_comm_info_panel(self):
         """Initialize communication status variables"""
         self.comm_status = {
             "connected": False,
+            "simulation_mode": False,
             "last_message": "Not connected",
             "read_count": 0,
             "error_count": 0,
             "last_error": None,
-            "ip_address": None
+            "read_error": None,             # ADS: last variable read failure (e.g. symbol not found)
+            "ip_address": None,
+            "last_interval_ms": None,      # Actual time between last two received packages (ms)
+            "requested_interval_ms": None  # Requested cycle time (ms), e.g. 50 for 50ms
         }
 
     def create_comm_info_panel(self):
@@ -927,6 +1357,11 @@ class MainWindow(QMainWindow):
         self.comm_stats_label.setStyleSheet("color: #aaa; font-size: 10px;")
         content_layout.addWidget(self.comm_stats_label)
         
+        self.comm_interval_label = QLabel("Last cycle: -- ms (requested: -- ms)")
+        self.comm_interval_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self.comm_interval_label.setToolTip("Time between last two received packages. If much higher than requested, PC–PLC communication is slower than the set cycle.")
+        content_layout.addWidget(self.comm_interval_label)
+        
         self.comm_message_label = QLabel("")
         self.comm_message_label.setStyleSheet("color: #888; font-size: 10px;")
         self.comm_message_label.setWordWrap(True)
@@ -942,22 +1377,132 @@ class MainWindow(QMainWindow):
         self.comm_info_content.setVisible(not is_visible)
         self.comm_toggle_btn.setText("▼" if not is_visible else "▲")
 
-    def start_plc_thread(self):
-        if self.plc_thread and self.plc_thread.is_alive():
-            QMessageBox.warning(self, "Connection Active", "Already connected to the PLC.")
+    def on_data_mode_changed(self, mode_text):
+        """Switch between Online Data (real-time) and Offline Data (CSV → DuckDB)."""
+        if mode_text == "Offline Data":
+            self.online_panel.setVisible(False)
+            self.offline_panel.setVisible(True)
+            # Clear variable list until user loads a CSV
+            self.var_list.clear()
+            self.all_variables = []
+            if self.offline_columns:
+                for c in self.offline_columns:
+                    self.var_list.addItem(c)
+                self.all_variables = list(self.offline_columns)
+        else:
+            self.online_panel.setVisible(True)
+            self.offline_panel.setVisible(False)
+            self.load_variables()
+
+    def on_device_type_changed(self, device_type):
+        """Show/hide address rows and update labels by Client Device Type (Snap7, ADS, Simulation)."""
+        if device_type == "Simulation":
+            self.address_row.setVisible(False)
+            self.pc_ip_row.setVisible(False)
+        else:
+            self.address_row.setVisible(True)
+            if device_type == "ADS":
+                self.address_label.setText("Target (PLC):")
+                self.ip_input.setPlaceholderText("192.168.1.10.1.1")
+                self.pc_ip_row.setVisible(True)
+            else:
+                self.address_label.setText("IP:")
+                self.ip_input.setPlaceholderText("192.168.0.20")
+                self.pc_ip_row.setVisible(False)
+
+    def load_offline_csv(self):
+        """Load a user-selected CSV into DuckDB and populate variable list for offline plotting."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select CSV file", "", "CSV (*.csv);;All files (*)"
+        )
+        if not path:
             return
+        path = os.path.normpath(path)
+        try:
+            if self.offline_db:
+                try:
+                    self.offline_db.close()
+                except Exception:
+                    pass
+                self.offline_db = None
+            self.offline_db = duckdb.connect(":memory:")
+            # Load CSV into DuckDB for fast querying (avoids re-reading CSV on each plot)
+            self.offline_db.execute(
+                "CREATE TABLE offline_data AS SELECT * FROM read_csv_auto(?)",
+                [path]
+            )
+            # Get column names
+            result = self.offline_db.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'offline_data' ORDER BY ordinal_position"
+            ).fetchall()
+            self.offline_columns = [row[0] for row in result]
+            self.offline_csv_path = path
+            self.var_list.clear()
+            self.all_variables = list(self.offline_columns)
+            for col in self.offline_columns:
+                self.var_list.addItem(col)
+            self.offline_path_label.setText(os.path.basename(path))
+            self.offline_path_label.setToolTip(path)
+            QMessageBox.information(
+                self, "CSV loaded",
+                f"Loaded {path} into DuckDB.\n{len(self.offline_columns)} columns available for plotting."
+            )
+        except Exception as e:
+            logging.error(f"Failed to load CSV into DuckDB: {e}")
+            QMessageBox.warning(
+                self, "Load failed",
+                f"Could not load CSV into DuckDB:\n{e}"
+            )
+            if self.offline_db:
+                try:
+                    self.offline_db.close()
+                except Exception:
+                    pass
+                self.offline_db = None
+            self.offline_columns = []
+            self.offline_csv_path = None
+            self.offline_path_label.setText("No file loaded")
+
+    def start_plc_thread(self):
+        if (self.plc_thread and self.plc_thread.is_alive()) or (self.ads_thread and self.ads_thread.is_alive()) or (self.simulator_thread and self.simulator_thread.isRunning()):
+            QMessageBox.warning(self, "Connection Active", "Already connected or in simulation mode.")
+            return
+        
+        device_type = self.device_type_combo.currentText()
         
         # Clean up any existing thread first
         if self.plc_thread:
             try:
                 self.plc_thread.stop()
                 self.plc_thread.join(timeout=1.0)
-            except:
+            except Exception:
                 pass
+            self.plc_thread = None
+        if self.ads_thread:
+            try:
+                self.ads_thread.stop()
+                self.ads_thread.join(timeout=1.0)
+            except Exception:
+                pass
+            self.ads_thread = None
+        if self.simulator_thread and self.simulator_thread.isRunning():
+            try:
+                self.simulator_thread._is_running = False
+                self.simulator_thread.wait(2000)
+            except Exception:
+                pass
+            self.simulator_thread = None
         
-        ip_address = self.ip_input.text()
+        address = self.ip_input.text().strip()
+        if device_type != "Simulation" and not address:
+            QMessageBox.warning(self, "Address Required", "Please enter IP (Snap7) or Target PLC AmsNetId (ADS).")
+            return
+        pc_ip = self.pc_ip_input.text().strip() if device_type == "ADS" else None
+        if device_type == "ADS" and not pc_ip:
+            QMessageBox.warning(self, "PC IP Required", "For ADS, enter your PC's IP (or AmsNetId). This is the address used for the route on the PLC.")
+            return
         
-        # Get communication speed
+        # Get communication speed (used for PLC; simulator has its own timing)
         try:
             comm_speed = float(self.speed_input.text())
             if comm_speed <= 0:
@@ -978,20 +1523,48 @@ class MainWindow(QMainWindow):
             if hasattr(graph, 'buffer_timestamps'):
                 graph.buffer_timestamps.clear()
         
-        self.comm_status["ip_address"] = ip_address
+        self.comm_status["ip_address"] = address if device_type != "Simulation" else None
         self.comm_status["connected"] = False
+        self.comm_status["simulation_mode"] = False
         self.comm_status["read_count"] = 0
         self.comm_status["error_count"] = 0
         self.comm_status["last_error"] = None
+        self.comm_status["read_error"] = None
         self.update_comm_info_display()
-        
-        self.plc_thread = PLCThread(ip_address, self.data_signal, self.status_signal, comm_speed)
-        self.plc_thread.start()
+
+        self._save_last_config()
+
+        if device_type == "Simulation":
+            csv_path = self.exchange_variables_path or os.path.join(os.path.dirname(__file__), "external", "exchange_variables.csv")
+            self.plc_thread = None
+            self.ads_thread = None
+            self.simulator_thread = PLCSimulator(csv_path=csv_path, parent=self)
+            self.simulator_thread.new_data.connect(self.data_signal.emit)
+            self.simulator_thread.start()
+            self.status_signal.emit("simulation", "Simulation mode", {})
+        elif device_type == "ADS":
+            self.plc_thread = None
+            self.simulator_thread = None
+            self.ads_thread = PLCADSThread(
+                address, self.data_signal, self.status_signal, comm_speed,
+                local_address=pc_ip, variable_names=list(self.all_variables)
+            )
+            self.ads_thread.start()
+        else:
+            self.simulator_thread = None
+            self.ads_thread = None
+            self.plc_thread = PLCThread(address, self.data_signal, self.status_signal, comm_speed)
+            self.plc_thread.start()
         
         # Update button states
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
         self.ip_input.setEnabled(False)
+        if device_type == "ADS":
+            self.pc_ip_input.setEnabled(False)
+        self.device_type_combo.setEnabled(False)
+        self.browse_exchange_btn.setEnabled(False)
+        self.browse_recipe_btn.setEnabled(False)
         # Speed can be changed while connected, buffer size only applies to new graphs
         self.speed_input.setEnabled(True)
         self.buffer_size_input.setEnabled(False)
@@ -1014,60 +1587,70 @@ class MainWindow(QMainWindow):
         """)
 
     def disconnect_plc(self):
-        """Disconnect from PLC and stop the communication thread"""
-        if not self.plc_thread or not self.plc_thread.is_alive():
-            # Even if thread is not alive, we need to re-enable the IP input
-            # This handles the case where connection failed but UI is still disabled
+        """Disconnect from PLC, ADS, or stop the simulation thread"""
+        was_simulation = False
+        if self.simulator_thread and self.simulator_thread.isRunning():
+            was_simulation = True
+            self.simulator_thread._is_running = False
+            if not self.simulator_thread.wait(3000):
+                logging.warning("Simulator thread did not stop gracefully")
+            self.simulator_thread = None
+        elif self.ads_thread and self.ads_thread.is_alive():
+            self.ads_thread.stop()
+            if not self.ads_thread.join(timeout=2.0):
+                logging.warning("ADS thread did not stop gracefully, forcing termination")
+            self.ads_thread = None
+        elif self.plc_thread and self.plc_thread.is_alive():
+            self.plc_thread.stop()
+            if not self.plc_thread.join(timeout=2.0):
+                logging.warning("PLC thread did not stop gracefully, forcing termination")
+            self.plc_thread = None
+        else:
             self.connect_btn.setEnabled(True)
             self.disconnect_btn.setEnabled(False)
             self.ip_input.setEnabled(True)
+            self.pc_ip_input.setEnabled(True)
+            self.device_type_combo.setEnabled(True)
             self.speed_input.setEnabled(True)
             self.buffer_size_input.setEnabled(True)
-            self.trigger_btn.setEnabled(False)  # Disable trigger when disconnected
-            QMessageBox.information(self, "Not Connected", "No active PLC connection to disconnect.")
+            self.browse_exchange_btn.setEnabled(True)
+            self.browse_recipe_btn.setEnabled(True)
+            self.trigger_btn.setEnabled(False)
+            QMessageBox.information(self, "Not Connected", "No active PLC, ADS, or simulation to disconnect.")
             return
         
-        # Stop the PLC thread
-        self.plc_thread.stop()
-        
-        # Wait for thread to finish (with timeout)
-        if not self.plc_thread.join(timeout=2.0):
-            # Force stop if thread doesn't respond
-            logging.warning("PLC thread did not stop gracefully, forcing termination")
-        
-        # Clear graph buffers to remove any None values
+        # Common cleanup: clear graph buffers, update status, button states
         for graph in self.graphs:
             for var_name in graph.buffers_y.keys():
-                # Clear and reinitialize buffers
                 graph.buffers_y[var_name].clear()
                 if var_name in graph.buffers_x:
                     graph.buffers_x[var_name].clear()
-                # Clear the plot line
                 if var_name in graph.lines:
                     graph.lines[var_name].setData([], [])
-                # Reset value labels
                 if var_name in graph.value_labels:
                     graph.value_labels[var_name].setText(f"{var_name}: --")
-            # Clear timestamp buffer
             if hasattr(graph, 'buffer_timestamps'):
                 graph.buffer_timestamps.clear()
         
-        # Update status
         self.comm_status["connected"] = False
-        self.comm_status["last_message"] = "Disconnected from PLC"
+        self.comm_status["simulation_mode"] = False
+        self.comm_status["last_message"] = "Disconnected from simulation." if was_simulation else "Disconnected from PLC"
         self.comm_status["last_error"] = None
+        self.comm_status["read_error"] = None
         self.comm_status["read_count"] = 0
         self.comm_status["error_count"] = 0
         self.update_comm_info_display()
         
-        # Update button states
         self.connect_btn.setEnabled(True)
         self.disconnect_btn.setEnabled(False)
         self.ip_input.setEnabled(True)
+        self.pc_ip_input.setEnabled(True)
+        self.device_type_combo.setEnabled(True)
         self.speed_input.setEnabled(True)
         self.buffer_size_input.setEnabled(True)
-        self.trigger_btn.setEnabled(False)  # Disable trigger when disconnected
-        # Reset trigger state on disconnect
+        self.browse_exchange_btn.setEnabled(True)
+        self.browse_recipe_btn.setEnabled(True)
+        self.trigger_btn.setEnabled(False)
         self.trigger_active = False
         self.trigger_btn.setText("⚡ Trigger")
         self.trigger_btn.setStyleSheet("""
@@ -1084,17 +1667,43 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { background-color: #555; color: #888; }
         """)
         
-        # Clear latest values
         for key in self.latest_values:
             self.latest_values[key] = 0.0
         
-        QMessageBox.information(self, "Disconnected", "Successfully disconnected from PLC.")
+        msg = "Successfully disconnected from simulation." if was_simulation else "Successfully disconnected from PLC."
+        QMessageBox.information(self, "Disconnected", msg)
 
     @Slot(str, str, object)
     def update_comm_status(self, status_type, message, details):
         """Update communication status from PLC thread"""
-        if status_type == "connected":
+        if status_type == "simulation":
             self.comm_status["connected"] = True
+            self.comm_status["simulation_mode"] = True
+            self.comm_status["last_message"] = message
+            # Same button states as connected
+            self.connect_btn.setEnabled(False)
+            self.disconnect_btn.setEnabled(True)
+            self.ip_input.setEnabled(False)
+            self.speed_input.setEnabled(True)
+            self.buffer_size_input.setEnabled(False)
+            self.trigger_btn.setEnabled(True)
+            self.trigger_active = False
+            self.trigger_btn.setText("⚡ Trigger")
+            self.trigger_btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #ff6b00; 
+                    color: white; 
+                    font-weight: bold; 
+                    padding: 10px; 
+                    border: none; 
+                    border-radius: 4px; 
+                }
+                QPushButton:hover { background-color: #ff8800; }
+                QPushButton:pressed { background-color: #cc5500; }
+            """)
+        elif status_type == "connected":
+            self.comm_status["connected"] = True
+            self.comm_status["simulation_mode"] = False
             self.comm_status["last_message"] = message
             # Update button states when connected
             self.connect_btn.setEnabled(False)
@@ -1121,14 +1730,18 @@ class MainWindow(QMainWindow):
             """)
         elif status_type == "disconnected":
             self.comm_status["connected"] = False
+            self.comm_status["simulation_mode"] = False
             self.comm_status["last_message"] = message
-            # Update button states when disconnected
             self.connect_btn.setEnabled(True)
             self.disconnect_btn.setEnabled(False)
             self.ip_input.setEnabled(True)
+            self.pc_ip_input.setEnabled(True)
+            self.device_type_combo.setEnabled(True)
             self.speed_input.setEnabled(True)
-            self.trigger_btn.setEnabled(False)  # Disable trigger when disconnected
             self.buffer_size_input.setEnabled(True)
+            self.browse_exchange_btn.setEnabled(True)
+            self.browse_recipe_btn.setEnabled(True)
+            self.trigger_btn.setEnabled(False)
             # Reset trigger state when disconnected
             self.trigger_active = False
             self.trigger_btn.setText("⚡ Trigger")
@@ -1149,19 +1762,30 @@ class MainWindow(QMainWindow):
             self.comm_status["last_error"] = message
             if "error_count" in details:
                 self.comm_status["error_count"] = details["error_count"]
-            # If we get an error and we're not connected, re-enable the IP input
-            # This handles the case where connection fails immediately
+            # If we get an error and we're not connected, re-enable inputs
             if not self.comm_status["connected"]:
                 self.connect_btn.setEnabled(True)
                 self.disconnect_btn.setEnabled(False)
                 self.ip_input.setEnabled(True)
+                self.pc_ip_input.setEnabled(True)
+                self.device_type_combo.setEnabled(True)
                 self.speed_input.setEnabled(True)
                 self.buffer_size_input.setEnabled(True)
+                self.browse_exchange_btn.setEnabled(True)
+                self.browse_recipe_btn.setEnabled(True)
         elif status_type == "stats":
             if "read_count" in details:
                 self.comm_status["read_count"] = details["read_count"]
             if "error_count" in details:
                 self.comm_status["error_count"] = details["error_count"]
+            if "last_interval_ms" in details:
+                self.comm_status["last_interval_ms"] = details["last_interval_ms"]
+            if "requested_interval_ms" in details:
+                self.comm_status["requested_interval_ms"] = details["requested_interval_ms"]
+            if "read_error" in details:
+                self.comm_status["read_error"] = details["read_error"]
+            else:
+                self.comm_status["read_error"] = None
         elif status_type == "info":
             self.comm_status["last_message"] = message
         
@@ -1174,9 +1798,11 @@ class MainWindow(QMainWindow):
             if new_speed <= 0:
                 raise ValueError("Speed must be positive")
             
-            # If connected, update the PLC thread speed dynamically
+            # If connected, update the active client thread speed
             if self.plc_thread and self.plc_thread.is_alive():
                 self.plc_thread.update_speed(new_speed)
+            if self.ads_thread and self.ads_thread.is_alive():
+                self.ads_thread.update_speed(new_speed)
             
             # Update speed for all existing graphs
             for graph in self.graphs:
@@ -1186,10 +1812,14 @@ class MainWindow(QMainWindow):
             # Invalid input, show warning and revert to previous value
             QMessageBox.warning(self, "Invalid Speed", 
                               "Please enter a valid positive number for communication speed (e.g., 0.05)")
-            # Revert to the last valid speed (get it from the thread if connected, otherwise use default)
+            # Revert to the last valid speed (get it from the active thread if connected)
             if self.plc_thread and self.plc_thread.is_alive():
                 with self.plc_thread._comm_speed_lock:
                     current_speed = self.plc_thread.comm_speed
+                self.speed_input.setText(str(current_speed))
+            elif self.ads_thread and self.ads_thread.is_alive():
+                with self.ads_thread._comm_speed_lock:
+                    current_speed = self.ads_thread.comm_speed
                 self.speed_input.setText(str(current_speed))
             else:
                 self.speed_input.setText("0.05")
@@ -1199,7 +1829,10 @@ class MainWindow(QMainWindow):
         status = self.comm_status
         
         # Status label with color
-        if status["connected"]:
+        if status.get("simulation_mode"):
+            status_text = "Status: Simulation Mode"
+            status_color = "#00E676"
+        elif status["connected"]:
             status_text = "Status: ✓ Connected"
             status_color = "#00E676"
         else:
@@ -1217,15 +1850,49 @@ class MainWindow(QMainWindow):
         stats_text = f"Reads: {status['read_count']} | Errors: {status['error_count']}"
         self.comm_stats_label.setText(stats_text)
         
-        # Last message/error
+        # Actual vs requested cycle time (PLC only; simulation has its own timing)
+        last_ms = status.get("last_interval_ms")
+        req_ms = status.get("requested_interval_ms")
+        if last_ms is not None and req_ms is not None:
+            interval_text = f"Last cycle: {last_ms:.1f} ms (requested: {req_ms:.0f} ms)"
+            self.comm_interval_label.setText(interval_text)
+            # Highlight if actual is noticeably higher than requested
+            if last_ms > req_ms * 1.5:
+                self.comm_interval_label.setStyleSheet("color: #FF9800; font-size: 10px;")
+            else:
+                self.comm_interval_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        else:
+            self.comm_interval_label.setText("Last cycle: -- ms (requested: -- ms)")
+            self.comm_interval_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        
+        # Last message/error (connection errors; ADS variable read failures shown via read_error)
         if status["last_error"]:
             self.comm_message_label.setText(f"⚠ {status['last_error']}")
             self.comm_message_label.setStyleSheet("color: #FF1744; font-size: 10px;")
+            self.comm_message_label.setToolTip("")
+        elif status.get("read_error"):
+            err_text = status["read_error"]
+            self.comm_message_label.setText(f"⚠ Read: {err_text}")
+            self.comm_message_label.setStyleSheet("color: #FF9800; font-size: 10px;")
+            # Hint when ADS route is missing: show how to add route and values to use
+            if "Missing ADS routes" in err_text or "Target machine not found" in err_text:
+                target = self.ip_input.text().strip() or "192.168.0.2"
+                route_ip = ".".join(target.split(".")[:4]) if target else "192.168.0.2"
+                self.comm_message_label.setToolTip(
+                    "Add route on THIS PC: TwinCAT 3 → System → Routes → Add route.\n"
+                    f"Target AmsNetId = {target} (or {route_ip}.1.1 if you use IP only).\n"
+                    f"Address / IP = {route_ip}\n"
+                    "See: external/TWINCAT_ADS_SETUP.md"
+                )
+            else:
+                self.comm_message_label.setToolTip("")
         elif status["last_message"]:
             self.comm_message_label.setText(f"ℹ {status['last_message']}")
             self.comm_message_label.setStyleSheet("color: #888; font-size: 10px;")
+            self.comm_message_label.setToolTip("")
         else:
             self.comm_message_label.setText("")
+            self.comm_message_label.setToolTip("")
 
     def apply_theme(self):
         app = QApplication.instance()
@@ -1264,10 +1931,14 @@ class MainWindow(QMainWindow):
         """)
 
     def load_variables(self):
-        """Load variables from CSV files and recipe parameters separately."""
+        """Load variables from the chosen exchange and recipe CSV files (browsable; any filename)."""
         import csv
         
-        # Load boolean variables from JSON for trigger dropdown
+        self.var_list.clear()
+        self.all_variables = []
+        self.recipe_params = []
+        
+        # Load boolean variables from JSON for trigger dropdown (Snap7)
         boolean_vars = []
         try:
             config_path = os.path.join("external", "snap7_node_ids.json")
@@ -1290,120 +1961,112 @@ class MainWindow(QMainWindow):
             self.trigger_var_combo.addItem("No BOOL variables found")
             self.trigger_var_combo.setEnabled(False)
         
-        # Load regular variables from exchange_variables.csv
+        # Load variables from chosen exchange_variables CSV (any name)
+        exchange_csv_path = self.exchange_variables_path or os.path.join(os.path.dirname(__file__), "external", "exchange_variables.csv")
         try:
-            exchange_csv_path = os.path.join("external", "exchange_variables.csv")
-            with open(exchange_csv_path, 'r', newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    var_name = row.get('Variable', '').strip()
-                    if var_name and var_name not in self.all_variables:
-                        self.var_list.addItem(var_name)
-                        self.all_variables.append(var_name)
-                        self.latest_values[var_name] = 0.0
-                        # Store metadata (min/max) from CSV
-                        try:
-                            min_val = float(row.get('Min', '0'))
-                            max_val = float(row.get('Max', '10'))
-                            self.variable_metadata[var_name] = {"min": min_val, "max": max_val}
-                        except (ValueError, TypeError):
-                            # Default values if parsing fails
-                            self.variable_metadata[var_name] = {"min": 0.0, "max": 10.0}
-        except FileNotFoundError:
-            print("Error: exchange_variables.csv not found in external folder.")
-        except Exception as e:
-            print(f"Error loading exchange_variables.csv: {e}")
-        
-        # Load recipe parameters from recipe_variables.csv
-        try:
-            recipe_csv_path = os.path.join("external", "recipe_variables.csv")
-            with open(recipe_csv_path, 'r', newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                self.recipe_params = []
-                for row in reader:
-                    var_name = row.get('Variable', '').strip()
-                    if var_name:
-                        self.recipe_params.append(var_name)
-                        # Initialize recipe parameter values
-                        if var_name not in self.latest_values:
+            if os.path.isfile(exchange_csv_path):
+                with open(exchange_csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        var_name = row.get('Variable', '').strip()
+                        if var_name and var_name not in self.all_variables:
+                            self.var_list.addItem(var_name)
+                            self.all_variables.append(var_name)
                             self.latest_values[var_name] = 0.0
-                        # Store metadata for recipe parameters too
-                        try:
-                            min_val = float(row.get('Min', '0'))
-                            max_val = float(row.get('Max', '10'))
-                            self.variable_metadata[var_name] = {"min": min_val, "max": max_val}
-                        except (ValueError, TypeError):
-                            self.variable_metadata[var_name] = {"min": 0.0, "max": 10.0}
-        except FileNotFoundError:
-            print("Error: recipe_variables.csv not found in external folder.")
-            # Fallback to empty list
-            self.recipe_params = []
+                            try:
+                                min_val = float(row.get('Min', '0'))
+                                max_val = float(row.get('Max', '10'))
+                                self.variable_metadata[var_name] = {"min": min_val, "max": max_val}
+                            except (ValueError, TypeError):
+                                self.variable_metadata[var_name] = {"min": 0.0, "max": 10.0}
+            else:
+                logging.warning("Exchange variables file not found: %s", exchange_csv_path)
         except Exception as e:
-            print(f"Error loading recipe_variables.csv: {e}")
+            logging.error("Error loading exchange variables CSV %s: %s", exchange_csv_path, e)
+        
+        # Load recipe parameters from chosen recipe_variables CSV (any name)
+        recipe_csv_path = self.recipe_variables_path or os.path.join(os.path.dirname(__file__), "external", "recipe_variables.csv")
+        try:
+            if os.path.isfile(recipe_csv_path):
+                with open(recipe_csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        var_name = row.get('Variable', '').strip()
+                        if var_name:
+                            self.recipe_params.append(var_name)
+                            if var_name not in self.latest_values:
+                                self.latest_values[var_name] = 0.0
+                            try:
+                                min_val = float(row.get('Min', '0'))
+                                max_val = float(row.get('Max', '10'))
+                                self.variable_metadata[var_name] = {"min": min_val, "max": max_val}
+                            except (ValueError, TypeError):
+                                self.variable_metadata[var_name] = {"min": 0.0, "max": 10.0}
+            else:
+                logging.warning("Recipe variables file not found: %s", recipe_csv_path)
+        except Exception as e:
+            logging.error("Error loading recipe variables CSV %s: %s", recipe_csv_path, e)
             self.recipe_params = []
+
+    def _quote_duckdb_identifier(self, name):
+        """Quote identifier for DuckDB (handles spaces and special chars)."""
+        return '"' + str(name).replace('"', '""') + '"'
 
     def add_new_graph(self):
         selected_items = self.var_list.selectedItems()
-        if not selected_items: return
+        if not selected_items:
+            return
         var_names = [item.text() for item in selected_items]
+        is_offline = self.data_mode_combo.currentText() == "Offline Data"
+        if is_offline:
+            if not self.offline_db or not self.offline_columns:
+                QMessageBox.warning(self, "No data", "Load a CSV first (Offline Data → Load CSV → DuckDB).")
+                return
         dialog = GraphConfigDialog(self.all_variables, self)
-        if dialog.exec() == QDialog.Accepted:
-            settings = dialog.get_settings()
-            container = QFrame()
-            container.setStyleSheet("background-color: #252526; border-radius: 6px;")
-            vbox = QVBoxLayout(container)
-            vbox.setContentsMargins(10,10,10,10)
-            vbox.setSpacing(5)
-            
-            header = QWidget(styleSheet="background-color: transparent;")
-            hbox = QHBoxLayout(header)
-            hbox.setContentsMargins(0,0,0,0)
-            title_text = f"{' • '.join(var_names)}  [vs {settings['x_axis']}]"
-            lbl_title = QLabel(title_text, styleSheet="font-weight: bold; color: #ccc; font-size: 13px;")
-            btn_close = QPushButton("✕", fixedWidth=24, fixedHeight=24, cursor=Qt.PointingHandCursor)
-            btn_close.setStyleSheet("""
-                QPushButton { background-color: transparent; color: #888; border-radius: 12px; font-weight: bold; }
-                QPushButton:hover { background-color: #cc3333; color: white; }
-            """)
-            hbox.addWidget(lbl_title)
-            hbox.addStretch()
-            hbox.addWidget(btn_close)
-            vbox.addWidget(header)
-            
-            # Get buffer size from input, validate it
+        if dialog.exec() != QDialog.Accepted:
+            return
+        settings = dialog.get_settings()
+        container = QFrame()
+        container.setStyleSheet("background-color: #252526; border-radius: 6px;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(10,10,10,10)
+        vbox.setSpacing(5)
+
+        header = QWidget(styleSheet="background-color: transparent;")
+        hbox = QHBoxLayout(header)
+        hbox.setContentsMargins(0,0,0,0)
+        title_text = f"{' • '.join(var_names)}  [vs {settings['x_axis']}]"
+        lbl_title = QLabel(title_text, styleSheet="font-weight: bold; color: #ccc; font-size: 13px;")
+        btn_close = QPushButton("✕", fixedWidth=24, fixedHeight=24, cursor=Qt.PointingHandCursor)
+        btn_close.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #888; border-radius: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #cc3333; color: white; }
+        """)
+        hbox.addWidget(lbl_title)
+        hbox.addStretch()
+        hbox.addWidget(btn_close)
+        vbox.addWidget(header)
+
+        if is_offline:
+            # Offline: query DuckDB, create graph, set static data
+            x_col = settings['x_axis']
+            cols = [x_col] + [v for v in var_names if v != x_col]
             try:
-                buffer_size = int(self.buffer_size_input.text())
-                if buffer_size <= 0:
-                    raise ValueError("Buffer size must be positive")
-            except ValueError:
-                QMessageBox.warning(self, "Invalid Buffer Size", "Please enter a valid positive integer for buffer size (e.g., 500). Using default: 500")
-                buffer_size = 500
-            
-            # Check if any selected variables are arrays (they add 600 points per update)
-            # If arrays are present, scale buffer size to accommodate more array updates
-            has_arrays = any(var_name.startswith('arr') for var_name in var_names)
-            if has_arrays:
-                # Arrays add 600 points per communication cycle
-                # Scale buffer to hold at least 25-30 array updates for better visibility
-                # If user set 5000, that's ~8 array updates, scale to ~30 updates = 18,000 points
-                array_size = 600  # Standard array size
-                min_array_updates = 30  # Minimum number of array updates to keep in buffer
-                scaled_buffer_size = max(buffer_size, array_size * min_array_updates)
-                if scaled_buffer_size > buffer_size:
-                    # Inform user that buffer was scaled up for arrays
-                    logging.info(f"Buffer size scaled from {buffer_size} to {scaled_buffer_size} to accommodate array variables (600 points per update)")
-                    buffer_size = scaled_buffer_size
-            
-            # Get current communication speed
-            try:
-                comm_speed = float(self.speed_input.text())
-                if comm_speed <= 0:
-                    comm_speed = 0.05  # Default
-            except ValueError:
-                comm_speed = 0.05  # Default
-            
+                quoted = [self._quote_duckdb_identifier(c) for c in cols]
+                sql = f"SELECT {', '.join(quoted)} FROM offline_data"
+                result = self.offline_db.execute(sql).fetchall()
+            except Exception as e:
+                logging.error(f"Offline query failed: {e}")
+                QMessageBox.warning(self, "Query failed", f"DuckDB query failed:\n{e}")
+                return
+            if not result:
+                QMessageBox.warning(self, "No rows", "CSV table has no rows.")
+                return
+            n_rows = len(result)
+            buffer_size = min(max(n_rows, 500), 500000)
+            comm_speed = 0.05
             new_graph = DynamicPlotWidget(
-                var_names, 
+                var_names,
                 x_axis_source=settings['x_axis'],
                 buffer_size=buffer_size,
                 recipe_params=self.recipe_params,
@@ -1412,11 +2075,53 @@ class MainWindow(QMainWindow):
                 comm_speed=comm_speed
             )
             vbox.addWidget(new_graph)
-            
-            self.graph_splitter.addWidget(container) # Add to splitter
+            self.graph_splitter.addWidget(container)
             self.graphs.append(new_graph)
-            
             btn_close.clicked.connect(lambda: self.remove_graph(container, new_graph))
+            col_index = {name: i for i, name in enumerate(cols)}
+            x_data = [row[0] for row in result]
+            y_series = {v: [row[col_index[v]] for row in result] for v in var_names if v in col_index}
+            new_graph.set_static_data(x_data, y_series)
+            return
+
+        # Online: existing behavior
+        try:
+            buffer_size = int(self.buffer_size_input.text())
+            if buffer_size <= 0:
+                raise ValueError("Buffer size must be positive")
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Buffer Size", "Please enter a valid positive integer for buffer size (e.g., 500). Using default: 500")
+            buffer_size = 500
+
+        has_arrays = any(var_name.startswith('arr') for var_name in var_names)
+        if has_arrays:
+            array_size = 600
+            min_array_updates = 30
+            scaled_buffer_size = max(buffer_size, array_size * min_array_updates)
+            if scaled_buffer_size > buffer_size:
+                logging.info(f"Buffer size scaled from {buffer_size} to {scaled_buffer_size} to accommodate array variables (600 points per update)")
+            buffer_size = scaled_buffer_size
+
+        try:
+            comm_speed = float(self.speed_input.text())
+            if comm_speed <= 0:
+                comm_speed = 0.05
+        except ValueError:
+            comm_speed = 0.05
+
+        new_graph = DynamicPlotWidget(
+            var_names,
+            x_axis_source=settings['x_axis'],
+            buffer_size=buffer_size,
+            recipe_params=self.recipe_params,
+            latest_values_cache=self.latest_values,
+            variable_metadata=self.variable_metadata,
+            comm_speed=comm_speed
+        )
+        vbox.addWidget(new_graph)
+        self.graph_splitter.addWidget(container)
+        self.graphs.append(new_graph)
+        btn_close.clicked.connect(lambda: self.remove_graph(container, new_graph))
 
     def remove_graph(self, container, graph_widget):
         container.setParent(None)
@@ -1475,9 +2180,15 @@ class MainWindow(QMainWindow):
                     graph.update_data(variable_name, value, x_value=x_val)
 
     def toggle_trigger(self):
-        """Toggle trigger state: Trigger (True) or Stop (False)"""
-        if not self.plc_thread or not self.plc_thread.is_alive():
+        """Toggle trigger state: Trigger (True) or Stop (False). Only Snap7 supports trigger."""
+        if (not self.plc_thread or not self.plc_thread.is_alive()) and (not self.ads_thread or not self.ads_thread.is_alive()) and (not self.simulator_thread or not self.simulator_thread.isRunning()):
             QMessageBox.warning(self, "Not Connected", "Please connect to PLC first.")
+            return
+        if self.simulator_thread and self.simulator_thread.isRunning():
+            QMessageBox.warning(self, "Simulation Mode", "Trigger is not available in simulation mode.")
+            return
+        if self.ads_thread and self.ads_thread.is_alive():
+            QMessageBox.warning(self, "ADS Mode", "Trigger is not available for ADS yet (Snap7 only).")
             return
         
         selected_var = self.trigger_var_combo.currentText()
@@ -1545,11 +2256,26 @@ class MainWindow(QMainWindow):
             """)
 
     def closeEvent(self, event):
+        self._save_last_config()
+        if self.simulator_thread and self.simulator_thread.isRunning():
+            self.simulator_thread._is_running = False
+            self.simulator_thread.wait(2000)
+        if self.ads_thread and self.ads_thread.is_alive():
+            self.ads_thread.stop()
+            self.ads_thread.join(timeout=2.0)
         if self.plc_thread and self.plc_thread.is_alive():
             self.plc_thread.stop()
-            self.plc_thread.join()
-        if self.plc_thread and self.plc_thread.db_connection:
-            self.plc_thread.db_connection.close()
+            self.plc_thread.join(timeout=2.0)
+        if self.plc_thread and getattr(self.plc_thread, 'db_connection', None):
+            try:
+                self.plc_thread.db_connection.close()
+            except Exception:
+                pass
+        if self.offline_db:
+            try:
+                self.offline_db.close()
+            except Exception:
+                pass
         event.accept()
 
 if __name__ == "__main__":
