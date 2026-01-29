@@ -32,10 +32,10 @@ class PLCThread(threading.Thread):
         self.array_triggers = {
             'arrPT_chamber': 'FlexPTS_running',
             'arrPR_chamber': 'FlexPTS_running',
-            'arrPT_Keyence1': 'FlexPTS_running_Keyence1',
-            'arrFT_Keyence1': 'FlexPTS_running_Keyence1',
-            'arrPT_Keyence2': 'FlexPTS_running_Keyence2',
-            'arrFT_Keyence2': 'FlexPTS_running_Keyence2',
+            'arrPT_Keyence1': 'FlexPTS_running', #FlexPTS_running_Keyence1',
+            'arrFT_Keyence1': 'FlexPTS_running', #FlexPTS_running_Keyence1',
+            'arrPT_Keyence2': 'FlexPTS_running', #FlexPTS_running_Keyence2',
+            'arrFT_Keyence2': 'FlexPTS_running', #FlexPTS_running_Keyence2',
             # Legacy names for backward compatibility
             'PT_Chamber_Array': 'FlexPTS_running',
             'PR_Chamber_Array': 'FlexPTS_running',
@@ -208,8 +208,8 @@ class PLCThread(threading.Thread):
                                 current_values[var_name] = value
                                 self.signal_emitter.emit(var_name, value)
                                 
-                                # Store trigger variable states for array reading logic
-                                if var_name in ['FlexPTS_running', 'FlexPTS_running_Keyence1', 'FlexPTS_running_Keyence2']:
+                                # Store trigger variable state for array reading (all arrays use FlexPTS_running)
+                                if var_name == 'FlexPTS_running':
                                     trigger_states[var_name] = bool(value)
                             except (ValueError, TypeError):
                                 pass

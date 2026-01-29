@@ -264,7 +264,23 @@ class DynamicPlotWidget(QWidget):
             self._setup_dual_axis()
         else:
             self._setup_single_axis()
-    
+
+        # For time-based plots with X auto: use sliding window so latest value stays visible
+        if not self.is_xy_plot and self.range_settings["x"]["auto"]:
+            self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
+
+    def _update_time_plot_x_range(self):
+        """Shift X range so the graph shows the latest values (sliding window pinned to the right)."""
+        if self.is_xy_plot or not self.range_settings["x"]["auto"]:
+            return
+        n = len(self.buffer_timestamps)
+        if n == 0:
+            return
+        window = self.buffer_size
+        x_min = max(0, n - window)
+        x_max = n
+        self.plot_widget.plotItem.setXRange(x_min, x_max, padding=0)
+
     def update_time_display(self):
         """Update the time display label with current day number and hour"""
         now = datetime.now()
@@ -398,10 +414,18 @@ class DynamicPlotWidget(QWidget):
                 settings = dialog.get_settings()
                 self.range_settings = settings
                 
-                # Update axis ranges
-                self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.XAxis, enable=settings["x"]["auto"])
-                if not settings["x"]["auto"]:
-                    self.plot_widget.plotItem.setXRange(settings["x"]["min"], settings["x"]["max"], padding=0)
+                # Update axis ranges (time-based: X "auto" = sliding window; XY/manual = normal)
+                if self.is_xy_plot:
+                    self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.XAxis, enable=settings["x"]["auto"])
+                    if not settings["x"]["auto"]:
+                        self.plot_widget.plotItem.setXRange(settings["x"]["min"], settings["x"]["max"], padding=0)
+                else:
+                    # Time-based: X "auto" means sliding window that follows latest value
+                    self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
+                    if settings["x"]["auto"]:
+                        self._update_time_plot_x_range()
+                    else:
+                        self.plot_widget.plotItem.setXRange(settings["x"]["min"], settings["x"]["max"], padding=0)
                 self.plot_widget.plotItem.enableAutoRange(axis=pg.ViewBox.YAxis, enable=settings["y1"]["auto"])
                 if not settings["y1"]["auto"]:
                     self.plot_widget.plotItem.setYRange(settings["y1"]["min"], settings["y1"]["max"], padding=0)
@@ -483,6 +507,7 @@ class DynamicPlotWidget(QWidget):
         
         txt = f"{var_name}: {y_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
         self.value_labels[var_name].setText(txt)
+        self._update_time_plot_x_range()
 
     def update_data_array(self, var_name, array_values):
         """Add all array values at once to the graph.
@@ -581,6 +606,7 @@ class DynamicPlotWidget(QWidget):
         
         txt = f"{var_name}: {latest_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
         self.value_labels[var_name].setText(txt)
+        self._update_time_plot_x_range()
 
     def mouse_moved(self, evt):
         pos = evt[0]
