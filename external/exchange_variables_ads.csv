@@ -1,2 +1,2 @@
-Variable,Type,Min,Max,Unit
-GVL_HMI.TemperaturePLC,INT,0,200,°C
+Variable,Type,Min,Max,Unit,Name
+GVL_HMI.TemperaturePLC,INT,0,200,°C,PLC temperature

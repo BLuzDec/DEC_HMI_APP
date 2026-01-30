@@ -1,2 +1,2 @@
-Variable,Type,Min,Max,Unit
-GVL_HMI.BatchName,String,0,1,-
+Variable,Type,Min,Max,Unit,Name
+GVL_HMI.BatchName,String,0,1,-,Batch name
