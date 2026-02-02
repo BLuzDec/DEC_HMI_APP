@@ -26,15 +26,25 @@ class PLCSimulator(QThread):
         
         self.variables = self._load_variables()
         self.variable_details = {var['Variable']: var for var in self.variables}
-        
-        self.recipe_params = [
-            'Recipe_ID', 'Recipe_Step_Time', 'Recipe_Temperature_Set', 
-            'Recipe_Pressure_Set', 'Recipe_Flow_Rate', 'Recipe_Mixer_Speed',
-            'Recipe_Conveyor_Speed', 'Recipe_Coating_Thickness', 
-            'Recipe_Curing_Time', 'Recipe_Batch_Size'
-        ]
-        
-        # Initialize sim_state for all variables found in the CSV
+        self.recipe_params = []
+        recipe_vars = self._load_recipe_variables()
+        for var in recipe_vars:
+            vname = var.get('Variable', '').strip()
+            if vname and vname not in self.variable_details:
+                self.variable_details[vname] = var
+                self.recipe_params.append(vname)
+        if not self.recipe_params:
+            self.recipe_params = [
+                'Recipe_ID', 'Recipe_Step_Time', 'Recipe_Temperature_Set',
+                'Recipe_Pressure_Set', 'Recipe_Flow_Rate', 'Recipe_Mixer_Speed',
+                'Recipe_Conveyor_Speed', 'Recipe_Coating_Thickness',
+                'Recipe_Curing_Time', 'Recipe_Batch_Size'
+            ]
+            for vname in self.recipe_params:
+                if vname not in self.variable_details:
+                    self.variable_details[vname] = {'Variable': vname, 'Min': '0', 'Max': '10'}
+
+        # Initialize sim_state for exchange + recipe variables (so tooltip gets recipe values)
         self.sim_state = {}
         for var in self.variables:
             try:
@@ -42,6 +52,15 @@ class PLCSimulator(QThread):
             except (ValueError, KeyError) as e:
                 print(f"Warning: Could not initialize variable '{var.get('Variable', 'N/A')}'. Check CSV format. Error: {e}")
                 self.sim_state[var.get('Variable', 'N/A')] = 0
+        for vname in self.recipe_params:
+            if vname not in self.sim_state:
+                details = self.variable_details.get(vname, {})
+                try:
+                    mn = float(details.get('Min', 0))
+                    mx = float(details.get('Max', 10))
+                    self.sim_state[vname] = random.uniform(mn, mx)
+                except (ValueError, TypeError):
+                    self.sim_state[vname] = 0.0
 
         self.tick = 0
 
@@ -75,6 +94,19 @@ class PLCSimulator(QThread):
                 {'Variable': 'Recipe_Curing_Time', 'Min': '60', 'Max': '600'},
                 {'Variable': 'Recipe_Batch_Size', 'Min': '1', 'Max': '100'}
             ]
+        return variables
+
+    def _load_recipe_variables(self):
+        """Load recipe variables CSV so simulator can emit them for tooltip (same format as exchange)."""
+        recipe_path = os.path.join(self.external_dir, 'recipe_variables.csv')
+        variables = []
+        if os.path.exists(recipe_path):
+            try:
+                with open(recipe_path, mode='r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    variables = [row for row in reader if (row.get('Variable') or '').strip()]
+            except Exception as e:
+                print(f"Warning: Could not read recipe_variables.csv: {e}")
         return variables
 
     def run(self):

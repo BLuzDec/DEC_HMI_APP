@@ -9,7 +9,8 @@ import threading
 import os
 
 class PLCThread(threading.Thread):
-    def __init__(self, ip_address, signal_emitter, status_emitter=None, comm_speed=0.05):
+    def __init__(self, ip_address, signal_emitter, status_emitter=None, comm_speed=0.05,
+                 recording_reference="time", recording_interval_sec=0.5, recording_trigger_variable=None):
         super().__init__()
         self.ip_address = ip_address
         self.signal_emitter = signal_emitter
@@ -24,6 +25,12 @@ class PLCThread(threading.Thread):
         self.last_error = None
         self._comm_speed_lock = threading.Lock()  # Lock for thread-safe speed updates
         self._write_lock = threading.Lock()  # Lock for thread-safe writes
+        # Recording: "time" = log at fixed interval (min 0.1 s); "variable" = log only when trigger variable changes
+        self.recording_reference = recording_reference if recording_reference in ("time", "variable") else "time"
+        self.recording_interval_sec = max(0.1, float(recording_interval_sec))
+        self.recording_trigger_variable = recording_trigger_variable if self.recording_reference == "variable" else None
+        self._last_recording_time = None   # for time-based: last time we wrote to DB
+        self._last_trigger_value = None   # for variable-based: last value of trigger variable
         
         # Time between last two successfully received packages (ms) - actual cycle time
         self._last_success_read_time = None
@@ -48,6 +55,9 @@ class PLCThread(threading.Thread):
         # Get the directory where this file is located
         self.external_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(self.external_dir)
+        self.db_path = os.path.join(self.external_dir, 'automation_data.db')
+        # Max recording duration: keep only last N hours (0 = no limit)
+        self.max_recording_hours = getattr(self, 'max_recording_hours', 24)
         
         # Load configuration from external folder
         config_path = os.path.join(self.external_dir, 'snap7_node_ids.json')
@@ -72,8 +82,7 @@ class PLCThread(threading.Thread):
 
     def init_duckdb(self):
         # Database stored in external folder
-        db_path = os.path.join(self.external_dir, 'automation_data.db')
-        self.db_connection = duckdb.connect(database=db_path, read_only=False)
+        self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
         self.db_connection.execute('''
             CREATE TABLE IF NOT EXISTS exchange_variables (
                 timestamp TIMESTAMP,
@@ -274,16 +283,52 @@ class PLCThread(threading.Thread):
                     self._last_interval_ms = (now - self._last_success_read_time) * 1000
                 self._last_success_read_time = now
                 
-                self.log_data_to_duckdb(current_values)
+                # Decide whether to record this cycle: time-based (interval) or variable-based (on change)
+                should_log = False
+                if self.recording_reference == "time":
+                    if self._last_recording_time is None or (now - self._last_recording_time) >= self.recording_interval_sec:
+                        should_log = True
+                        self._last_recording_time = now
+                else:
+                    # variable: record when trigger variable value changes (or first time we see it)
+                    trigger_val = current_values.get(self.recording_trigger_variable) if self.recording_trigger_variable else None
+                    if trigger_val is not None:
+                        if self._last_trigger_value is None or trigger_val != self._last_trigger_value:
+                            should_log = True
+                        self._last_trigger_value = trigger_val
+                    if should_log:
+                        self._last_recording_time = now  # for purge / stats
                 
-                dose_number = current_values.get('Dose_number')
-                if dose_number != last_logged_dose_number:
-                    # Check for array variables (using both old and new names for compatibility)
+                if should_log:
+                    self.log_data_to_duckdb(current_values)
+                    dose_number = current_values.get('Dose_number')
                     pt_chamber_array = current_values.get('arrPT_chamber') or current_values.get('PT_Chamber_Array')
-                    if pt_chamber_array:
+                    if pt_chamber_array and dose_number is not None:
                         pr_chamber_array = current_values.get('arrPR_chamber') or current_values.get('PR_Chamber_Array')
                         self.log_array_data_to_duckdb(dose_number, pt_chamber_array, pr_chamber_array)
-                    last_logged_dose_number = dose_number
+                
+                # For time-based we also log array when dose_number changes (even if not this interval)
+                if self.recording_reference == "time":
+                    dose_number = current_values.get('Dose_number')
+                    if dose_number != last_logged_dose_number:
+                        pt_chamber_array = current_values.get('arrPT_chamber') or current_values.get('PT_Chamber_Array')
+                        if pt_chamber_array:
+                            pr_chamber_array = current_values.get('arrPR_chamber') or current_values.get('PR_Chamber_Array')
+                            self.log_array_data_to_duckdb(dose_number, pt_chamber_array, pr_chamber_array)
+                        last_logged_dose_number = dose_number
+                
+                # Periodic purge: keep only last max_recording_hours (every ~500 cycles to avoid overhead)
+                if self.max_recording_hours > 0 and self.read_count % 500 == 0 and self.db_connection:
+                    try:
+                        cutoff = datetime.datetime.now() - datetime.timedelta(hours=self.max_recording_hours)
+                        self.db_connection.execute(
+                            "DELETE FROM exchange_variables WHERE timestamp < ?", (cutoff,)
+                        )
+                        self.db_connection.execute(
+                            "DELETE FROM exchange_recipes WHERE timestamp < ?", (cutoff,)
+                        )
+                    except Exception as e:
+                        logging.debug(f"Recording purge skipped: {e}")
                 
                 # Update stats every 100 reads
                 if self.read_count % 100 == 0:

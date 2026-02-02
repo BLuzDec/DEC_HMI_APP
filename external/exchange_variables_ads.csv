@@ -1,2 +1,11 @@
 Variable,Type,Min,Max,Unit,Name
 GVL_HMI.TemperaturePLC,INT,0,200,°C,PLC temperature
+GVL_Internal.Sytem_date,String,-,-,-,Date
+GVL_Internal.Sytem_time,String,-,-,-,Time
+GVL_HMI.BatchTotalPiece,UDINT,0,-,-,Number of cartridge
+GVL_HMI.HistoryWeightTare[1],REAL,0,-,g,Cartridges weight [g]
+GVL_HMI.HistoryWeightDose[1],REAL,0,-,g,Powder dosed weight [g]
+GVL_HMI.StWeighFill.iNewCartState,BOOL,0,1,-,Dose Status [1: Passed, 0: Rejected]
+GVL_HMI.Recipes_StWeighFill.Param.TargetWeight,REAL,0,-,g,Target dose [g]
+GVL_HMI.Recipes_StWeighFill.Param.WeightDoseMin,REAL,0,-,g,Min dose [g]
+GVL_HMI.Recipes_StWeighFill.Param.WeightDoseMax,REAL,0,-,g,Max dose [g]

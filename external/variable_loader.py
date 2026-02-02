@@ -184,9 +184,7 @@ def load_exchange_and_recipes(
     all_variables.extend(exchange_vars)
 
     recipe_params, variable_metadata = load_recipe_csv(rec_path, variable_metadata)
-    for v in recipe_params:
-        if v not in all_variables:
-            all_variables.append(v)
+    # Data points shown (graphs, var list) use only exchange variables; recipe_params stay separate for recipe UI.
 
     return LoadedVariables(
         all_variables=all_variables,

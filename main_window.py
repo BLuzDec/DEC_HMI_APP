@@ -11,9 +11,9 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QDialog, QComboBox, QDialogButtonBox, QFormLayout,
                                QCheckBox, QLineEdit, QMessageBox, QFileDialog,
                                QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView,
-                               QDoubleSpinBox, QSpinBox)
-from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings
-from PySide6.QtGui import QPalette, QColor, QIcon
+                               QDoubleSpinBox, QSpinBox, QDateTimeEdit)
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
 import pyqtgraph as pg
 from collections import deque
 import numpy as np
@@ -24,8 +24,24 @@ from external.variable_loader import load_exchange_and_recipes
 
 
 def _app_icon():
-    """Load application icon from assets or app directory. Place app_icon.ico or app_icon.png in the app folder or in assets/."""
+    """Load application icon: prefer DEC Group logo with taskbar sizes, then other Images/assets."""
     base = os.path.dirname(os.path.abspath(__file__))
+    # DEC Group logo: build multi-size icon so it fits entirely in Windows taskbar (16/24/32)
+    dec_group = os.path.join(base, "Images", "Dec Group_bleu_noir_transparent.png")
+    if os.path.isfile(dec_group):
+        pix = QPixmap(dec_group)
+        if not pix.isNull():
+            icon = QIcon()
+            for size in (16, 24, 32, 48, 256):
+                scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                icon.addPixmap(scaled)
+            return icon
+    # Fallback: Dec True end-to-end logo
+    dec_logo = os.path.join(base, "Images", "Dec True end-to-end final white_small.png")
+    if os.path.isfile(dec_logo):
+        icon = QIcon(dec_logo)
+        if not icon.isNull():
+            return icon
     for name in ("app_icon.ico", "app_icon.png", "icon.ico"):
         for folder in (base, os.path.join(base, "assets")):
             path = os.path.join(folder, name)
@@ -63,10 +79,37 @@ class GraphConfigDialog(QDialog):
         self.combo_x_axis = QComboBox()
         self.combo_x_axis.setMaxVisibleItems(12)
         self.combo_x_axis.addItem("Time (Index)")
+        self.combo_x_axis.addItem("Discrete index (1, 2, 3…)")
         for var in variable_list:
             self.combo_x_axis.addItem(var)
+        self.combo_x_axis.setToolTip(
+            "Time (Index): 0-based index, shown as time. "
+            "Discrete index: row count 1, 2, 3… up to total rows (e.g. 3 runs × 10 doses = 1..30); no fold-back on X."
+        )
         self.combo_x_axis.currentTextChanged.connect(self._update_title_placeholder)
+        self.combo_x_axis.currentTextChanged.connect(self._on_x_axis_changed)
         form_layout.addRow("X-Axis Source:", self.combo_x_axis)
+
+        # Linked variable for discrete index (shown only when X-Axis = Discrete index)
+        self.linked_var_label = QLabel("Linked variable (resets define new run):")
+        self.combo_linked_var = QComboBox()
+        self.combo_linked_var.setMaxVisibleItems(12)
+        self.combo_linked_var.addItem("(none – count every row)", "")
+        for var in variable_list:
+            self.combo_linked_var.addItem(var, var)
+        # Default to variable that looks like dose/cartridge counter if present
+        for i in range(self.combo_linked_var.count()):
+            v = self.combo_linked_var.itemData(i)
+            if v and ("BatchTotalPiece" in str(v) or "Number of cartridge" in str(v) or "Number of doses" in str(v)):
+                self.combo_linked_var.setCurrentIndex(i)
+                break
+        self.combo_linked_var.setToolTip(
+            "Variable whose value changes define each 'row' (e.g. Number of cartridge). "
+            "When it resets (e.g. 52→1), the index keeps counting: 1,2,…,52,53,…,102,…"
+        )
+        self._linked_var_row = form_layout.rowCount()
+        form_layout.addRow(self.linked_var_label, self.combo_linked_var)
+        self._on_x_axis_changed(self.combo_x_axis.currentText())
 
         # Buffer size (per graph)
         self.buffer_size_edit = QLineEdit("5000")
@@ -84,8 +127,8 @@ class GraphConfigDialog(QDialog):
         # Y-Axis mode: 2 vars = dropdown; 3+ vars = per-variable Y1/Y2 assignment
         nvars = len(self._selected_vars)
         x_src = self.combo_x_axis.currentText()
-        is_time = x_src == "Time (Index)"
-        if nvars == 2 and is_time:
+        is_index_based = x_src in ("Time (Index)", "Discrete index (1, 2, 3…)")
+        if nvars == 2 and is_index_based:
             self.y_axis_mode_combo = QComboBox()
             self.y_axis_mode_combo.addItem("Auto (by variable type)", "auto")
             self.y_axis_mode_combo.addItem("Force same axis", "same")
@@ -93,7 +136,7 @@ class GraphConfigDialog(QDialog):
             self.y_axis_mode_combo.setToolTip("Auto: same axis if same type/range, else dual. Force same/dual overrides.")
             form_layout.addRow("Y-Axis mode (2 vars):", self.y_axis_mode_combo)
             self.y_axis_assignments = None
-        elif nvars >= 3 and is_time:
+        elif nvars >= 3 and is_index_based:
             self.y_axis_mode_combo = None
             assign_group = QWidget()
             assign_layout = QFormLayout(assign_group)
@@ -136,6 +179,11 @@ class GraphConfigDialog(QDialog):
         if hasattr(self, "title_edit"):
             self.title_edit.setPlaceholderText(self._default_title())
 
+    def _on_x_axis_changed(self, x_src):
+        discrete = x_src == "Discrete index (1, 2, 3…)"
+        self.linked_var_label.setVisible(discrete)
+        self.combo_linked_var.setVisible(discrete)
+
     def get_settings(self):
         out = {
             "x_axis": self.combo_x_axis.currentText(),
@@ -156,6 +204,11 @@ class GraphConfigDialog(QDialog):
         else:
             out["y_axis_mode"] = "auto"
             out["y_axis_assignments"] = None
+        out["discrete_index_linked_variable"] = None
+        if self.combo_x_axis.currentText() == "Discrete index (1, 2, 3…)":
+            linked = self.combo_linked_var.currentData()
+            if linked:
+                out["discrete_index_linked_variable"] = linked
         return out
 
 class RangeAxisSpinBox(QDoubleSpinBox):
@@ -340,20 +393,173 @@ class RangeConfigDialog(QDialog):
         settings["display_deadband"] = self.deadband_spin.value() if hasattr(self, "deadband_spin") else 0.0
         return settings
 
+
+class ExportRecordingDialog(QDialog):
+    """Dialog to export recorded session data to CSV with time range and sampling interval."""
+    INTERVALS_MS = [50, 500, 1000]  # 50 ms, 500 ms, 1 s
+
+    def __init__(self, db_path, time_min, time_max, parent=None):
+        super().__init__(parent)
+        self.db_path = db_path
+        self.time_min = time_min
+        self.time_max = time_max
+        _icon = _app_icon()
+        if not _icon.isNull():
+            self.setWindowIcon(_icon)
+        self.setWindowTitle("Export recording to CSV")
+        self.setModal(True)
+        self.setStyleSheet("""
+            QDialog { background-color: #333; color: white; }
+            QLabel { color: white; }
+            QDateTimeEdit, QComboBox {
+                background-color: #444; color: white; border: 1px solid #555; padding: 5px;
+            }
+            QPushButton { background-color: #007ACC; color: white; padding: 8px 15px; border: none; }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        layout = QFormLayout(self)
+        self.from_edit = QDateTimeEdit()
+        self.from_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.from_edit.setCalendarPopup(True)
+        if time_min:
+            self.from_edit.setDateTime(QDateTime(time_min))
+        layout.addRow("From:", self.from_edit)
+        self.to_edit = QDateTimeEdit()
+        self.to_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.to_edit.setCalendarPopup(True)
+        if time_max:
+            self.to_edit.setDateTime(QDateTime(time_max))
+        layout.addRow("To:", self.to_edit)
+        self.interval_combo = QComboBox()
+        for ms in self.INTERVALS_MS:
+            if ms >= 1000:
+                self.interval_combo.addItem(f"{ms // 1000} s", ms / 1000.0)
+            else:
+                self.interval_combo.addItem(f"{ms} ms", ms / 1000.0)
+        self.interval_combo.setCurrentIndex(1)  # 500 ms default
+        self.interval_combo.setToolTip("Sample interval for exported rows (50 ms, 500 ms, or 1 s).")
+        layout.addRow("Interval:", self.interval_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def get_from_to_interval(self):
+        """Return (from_datetime, to_datetime, interval_seconds)."""
+        from_qt = self.from_edit.dateTime().toPython()
+        to_qt = self.to_edit.dateTime().toPython()
+        interval_sec = self.interval_combo.currentData()
+        return from_qt, to_qt, interval_sec
+
+
+def export_recording_to_csv(db_path, from_dt, to_dt, interval_sec, csv_path):
+    """
+    Export exchange_variables from DuckDB to CSV with resampling by interval_sec.
+    Columns: timestamp;var1;var2;... (semicolon-separated). Uses first value in each time bucket.
+    """
+    conn = duckdb.connect(database=db_path, read_only=True)
+    try:
+        # Resample: bucket by interval, first value per variable per bucket
+        interval_placeholder = interval_sec
+        result = conn.execute("""
+            SELECT
+                (floor(epoch(timestamp)::DOUBLE / ?) * ?) AS ts_bucket,
+                variable_name,
+                first(value) AS value
+            FROM exchange_variables
+            WHERE timestamp >= ? AND timestamp <= ?
+            GROUP BY ts_bucket, variable_name
+            ORDER BY ts_bucket, variable_name
+        """, (interval_placeholder, interval_placeholder, from_dt, to_dt)).fetchall()
+        if not result:
+            return 0
+        # Build pivot: buckets -> { variable_name: value }
+        from collections import defaultdict
+        buckets = defaultdict(dict)
+        for ts_bucket, var_name, value in result:
+            buckets[ts_bucket][var_name] = value
+        all_vars = sorted(set(v for row in result for v in [row[1]]))
+        buckets_sorted = sorted(buckets.keys())
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            header = "timestamp;" + ";".join(all_vars)
+            f.write(header + "\n")
+            for ts_bucket in buckets_sorted:
+                row_vals = [datetime.fromtimestamp(ts_bucket).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]]
+                for v in all_vars:
+                    row_vals.append(str(buckets[ts_bucket].get(v, "")))
+                f.write(";".join(row_vals) + "\n")
+        return len(buckets_sorted)
+    finally:
+        conn.close()
+
+
+def get_recording_time_range(db_path):
+    """Return (min_timestamp, max_timestamp) from exchange_variables, or (None, None) if empty."""
+    if not db_path or not os.path.isfile(db_path):
+        return None, None
+    try:
+        conn = duckdb.connect(database=db_path, read_only=True)
+        try:
+            row = conn.execute(
+                "SELECT min(timestamp), max(timestamp) FROM exchange_variables"
+            ).fetchone()
+            if row and row[0] is not None and row[1] is not None:
+                return row[0], row[1]
+            return None, None
+        finally:
+            conn.close()
+    except Exception:
+        return None, None
+
+
+def truncate_recording_db(db_path):
+    """Delete all rows from exchange_variables and exchange_recipes."""
+    if not db_path or not os.path.isfile(db_path):
+        return
+    try:
+        conn = duckdb.connect(database=db_path, read_only=False)
+        try:
+            conn.execute("DELETE FROM exchange_variables")
+            conn.execute("DELETE FROM exchange_recipes")
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.warning("Truncate recording DB failed: %s", e)
+
+
+def recording_has_data(db_path):
+    """Return True if exchange_variables has at least one row."""
+    if not db_path or not os.path.isfile(db_path):
+        return False
+    try:
+        conn = duckdb.connect(database=db_path, read_only=True)
+        try:
+            n = conn.execute("SELECT count(*) FROM exchange_variables").fetchone()[0]
+            return n > 0
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 class DynamicPlotWidget(QWidget):
     """
     A wrapper around pyqtgraph.PlotWidget that manages its own data lines.
     Supports dual Y-axes, XY plotting, live value headers, and hover inspection.
     """
     def __init__(self, variable_names, x_axis_source="Time (Index)", buffer_size=500, recipe_params=None, latest_values_cache=None, variable_metadata=None, comm_speed=0.05,
-                 graph_title="", y_axis_mode="auto", y_axis_assignments=None, display_deadband=0.0):
+                 graph_title="", y_axis_mode="auto", y_axis_assignments=None, display_deadband=0.0, discrete_index_linked_variable=None):
         super().__init__()
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0,0,0,0)
 
         self.variables = variable_names
         self.x_axis_source = x_axis_source
-        self.is_xy_plot = (x_axis_source != "Time (Index)")
+        self.is_discrete_index = (x_axis_source == "Discrete index (1, 2, 3…)")
+        self.discrete_index_linked_variable = (discrete_index_linked_variable or "").strip() or None
+        self.is_xy_plot = (x_axis_source != "Time (Index)" and not self.is_discrete_index)
+        self._discrete_index_counter = 0
+        self._discrete_index_last_linked_value = None  # only advance index when linked variable value changes
         self.recipe_params = recipe_params if recipe_params else []
         self.latest_values_cache = latest_values_cache if latest_values_cache else {}
         self.variable_metadata = variable_metadata if variable_metadata else {}
@@ -437,15 +643,20 @@ class DynamicPlotWidget(QWidget):
         self.plot_widget.getAxis('bottom').setPen('#888')
         self.plot_widget.getAxis('left').setTextPen('#aaa')
         self.plot_widget.getAxis('bottom').setTextPen('#aaa')
-        self.plot_widget.setLabel('bottom', self.x_axis_source if self.is_xy_plot else 'Time (MM:SS.mmm)')
-        
-        # Set up time formatter for x-axis when using Time (Index)
-        if not self.is_xy_plot:
+        if self.is_xy_plot:
+            self.plot_widget.setLabel('bottom', self.x_axis_source)
+        elif self.is_discrete_index:
+            self.plot_widget.setLabel('bottom', 'Row index')
+        else:
+            self.plot_widget.setLabel('bottom', 'Time (MM:SS.mmm)')
+        # Set up time formatter for x-axis only when using Time (Index)
+        if not self.is_xy_plot and not self.is_discrete_index:
             self.setup_time_formatter()
 
         self.lines = {}
         self.buffers_y = {}
         self.buffers_x = {}
+        self.buffers_x_discrete = deque(maxlen=buffer_size)  # one x per "row" when discrete index is linked
         self.buffer_timestamps = deque(maxlen=buffer_size)  # Store actual timestamps for each data point
         self.buffer_size = buffer_size
         self.p2 = None
@@ -579,12 +790,24 @@ class DynamicPlotWidget(QWidget):
         """Shift X range so the graph shows the latest values (sliding window pinned to the right)."""
         if self.is_xy_plot or not self.range_settings["x"]["auto"]:
             return
-        n = len(self.buffer_timestamps)
-        if n == 0:
-            return
+        ref_var = self.variables[0] if self.variables else None
         window = self.buffer_size
-        x_min = max(0, n - window)
-        x_max = n
+        if self.is_discrete_index and getattr(self, "discrete_index_linked_variable", None):
+            x_list = list(self.buffers_x_discrete)
+            if not x_list:
+                return
+            x_max = x_list[-1]
+            x_min = max(1, x_max - window + 1)
+        else:
+            n = len(self.buffers_y.get(ref_var, [])) if ref_var else len(self.buffer_timestamps)
+            if n == 0:
+                return
+            if self.is_discrete_index:
+                x_min = max(1, n - window + 1)
+                x_max = n
+            else:
+                x_min = max(0, n - window)
+                x_max = n
         self._last_programmatic_x_range = (x_min, x_max)
         self.plot_widget.plotItem.setXRange(x_min, x_max, padding=0)
 
@@ -733,18 +956,25 @@ class DynamicPlotWidget(QWidget):
         if self.is_xy_plot:
             for var in self.buffers_x:
                 self.buffers_x[var] = deque(list(self.buffers_x[var])[-new_size:], maxlen=new_size)
+        self.buffers_x_discrete = deque(list(self.buffers_x_discrete)[-new_size:], maxlen=new_size)
         self.buffer_size = new_size
 
     def _add_variable(self, var, color, plot_item):
         pen = pg.mkPen(color=color, width=2)
-        symbol = 'o' if self.is_xy_plot else None
-        symbolBrush = color if self.is_xy_plot else None
+        # XY plot: dots at each point; discrete index: small dots only noticeable
+        use_symbol = self.is_xy_plot or self.is_discrete_index
+        symbol = 'o' if use_symbol else None
+        symbolBrush = color if use_symbol else None
+        symbolSize = 3 if self.is_discrete_index else (7 if self.is_xy_plot else None)
 
+        opts = {"pen": pen, "symbol": symbol, "symbolBrush": symbolBrush, "antialias": True}
+        if symbolSize is not None:
+            opts["symbolSize"] = symbolSize
         if isinstance(plot_item, pg.ViewBox):
-            line = pg.PlotCurveItem(name=var, pen=pen, symbol=symbol, symbolBrush=symbolBrush, antialias=True)
+            line = pg.PlotCurveItem(name=var, **opts)
             plot_item.addItem(line)
         else:
-            line = plot_item.plot(name=var, pen=pen, symbol=symbol, symbolBrush=symbolBrush, antialias=True)
+            line = plot_item.plot(name=var, **opts)
         
         self.lines[var] = line
         self.buffers_y[var] = deque(maxlen=self.buffer_size)
@@ -920,7 +1150,14 @@ class DynamicPlotWidget(QWidget):
             except (ValueError, TypeError):
                 continue
         if delta:
-            self.line_delta.setData(delta)
+            if self.is_discrete_index:
+                if getattr(self, "discrete_index_linked_variable", None):
+                    x_delta = list(self.buffers_x_discrete)[:len(delta)]
+                else:
+                    x_delta = list(range(1, len(delta) + 1))
+                self.line_delta.setData(x_delta, delta)
+            else:
+                self.line_delta.setData(delta)
             self.line_delta.show()
         else:
             self.line_delta.hide()
@@ -935,12 +1172,24 @@ class DynamicPlotWidget(QWidget):
             return value
 
     def update_data(self, var_name, y_value, x_value=None):
-        if var_name not in self.variables: return
-        
+        # Discrete index linked variable: advance index only when its value changes (e.g. 1→2, 2→3)
+        if getattr(self, "discrete_index_linked_variable", None) and var_name == self.discrete_index_linked_variable:
+            try:
+                new_val = float(y_value) if y_value is not None else None
+            except (ValueError, TypeError):
+                new_val = y_value
+            if new_val != self._discrete_index_last_linked_value:
+                self._discrete_index_last_linked_value = new_val
+                self._discrete_index_counter += 1
+                self.buffers_x_discrete.append(self._discrete_index_counter)
+            return
+        if var_name not in self.variables:
+            return
+
         # Skip None values to prevent plotting errors
         if y_value is None:
             return
-        
+
         # Convert to float if possible, otherwise skip
         try:
             y_value = float(y_value)
@@ -948,13 +1197,13 @@ class DynamicPlotWidget(QWidget):
             return
         # Apply display deadband (quantize)
         y_value = self._apply_deadband(y_value)
-        
+
         # Store timestamp when adding a new data point (when buffer length increases)
         # All variables in the same communication cycle share the same timestamp
         current_buffer_length = len(self.buffers_y.get(var_name, []))
         self.buffers_y[var_name].append(y_value)
         new_buffer_length = len(self.buffers_y[var_name])
-        
+
         # If buffer length increased, this is a new data point - store its timestamp
         if new_buffer_length > current_buffer_length:
             # Capture the exact timestamp when this signal was received
@@ -962,7 +1211,7 @@ class DynamicPlotWidget(QWidget):
             # Only store if we don't already have a timestamp for this position
             if len(self.buffer_timestamps) < new_buffer_length:
                 self.buffer_timestamps.append(data_timestamp)
-        
+
         if self.is_xy_plot:
             if x_value is None: x_value = 0.0
             try:
@@ -985,7 +1234,19 @@ class DynamicPlotWidget(QWidget):
             y_data = [float(y) for y in self.buffers_y[var_name] if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
             if y_data:
                 try:
-                    self.lines[var_name].setData(y_data)
+                    if self.is_discrete_index:
+                        if getattr(self, "discrete_index_linked_variable", None):
+                            x_list = list(self.buffers_x_discrete)
+                            min_len = min(len(x_list), len(y_data))
+                            if min_len > 0:
+                                x_data = x_list[:min_len]
+                                y_plot = y_data[:min_len]
+                                self.lines[var_name].setData(x_data, y_plot)
+                        else:
+                            x_data = list(range(1, len(y_data) + 1))
+                            self.lines[var_name].setData(x_data, y_data)
+                    else:
+                        self.lines[var_name].setData(y_data)
                 except Exception as e:
                     logging.warning(f"Error plotting {var_name}: {e}")
         
@@ -1027,7 +1288,7 @@ class DynamicPlotWidget(QWidget):
         if n == 0:
             return
         if x_data is None or len(x_data) < n:
-            x_list = list(range(n))
+            x_list = list(range(1, n + 1)) if self.is_discrete_index else list(range(n))
         else:
             x_list = []
             for v in x_data[:n]:
@@ -1038,7 +1299,7 @@ class DynamicPlotWidget(QWidget):
                 except (ValueError, TypeError):
                     pass
             if len(x_list) != n:
-                x_list = list(range(n))
+                x_list = list(range(1, n + 1)) if self.is_discrete_index else list(range(n))
         for var_name in self.variables:
             if var_name not in self.buffers_y or var_name not in self.lines:
                 continue
@@ -1049,6 +1310,9 @@ class DynamicPlotWidget(QWidget):
             if self.is_xy_plot:
                 self.buffers_x[var_name] = deque(x_list[:min_len], maxlen=self.buffer_size)
                 self.lines[var_name].setData(x_list[:min_len], y_list[:min_len])
+            elif self.is_discrete_index:
+                x_plot = list(range(1, min_len + 1))
+                self.lines[var_name].setData(x_plot, y_list[:min_len])
             else:
                 self.lines[var_name].setData(y_list[:min_len])
             if y_list:
@@ -1068,7 +1332,9 @@ class DynamicPlotWidget(QWidget):
         Timestamps are distributed over the communication cycle time."""
         if var_name not in self.variables:
             return
-        
+        # When discrete index is linked to a variable, X is driven by that variable's updates only; skip array Y updates
+        if getattr(self, "discrete_index_linked_variable", None):
+            return
         if not array_values or len(array_values) == 0:
             return
         
@@ -1137,11 +1403,15 @@ class DynamicPlotWidget(QWidget):
                     except Exception as e:
                         logging.warning(f"Error plotting {var_name}: {e}")
         else:
-            # For time-based plots, plot all y values
+            # For time-based or discrete-index plots, plot y values
             y_data = [float(y) for y in self.buffers_y[var_name] if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
             if y_data:
                 try:
-                    self.lines[var_name].setData(y_data)
+                    if self.is_discrete_index:
+                        x_data = list(range(1, len(y_data) + 1))
+                        self.lines[var_name].setData(x_data, y_data)
+                    else:
+                        self.lines[var_name].setData(y_data)
                 except Exception as e:
                     logging.warning(f"Error plotting {var_name}: {e}")
         
@@ -1167,88 +1437,129 @@ class DynamicPlotWidget(QWidget):
 
     def mouse_moved(self, evt):
         pos = evt[0]
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-            ref_var = self.variables[0] if self.variables else None
-            if not ref_var: return
-            
-            x_data = np.array(self.buffers_x.get(ref_var, [])) if self.is_xy_plot else np.arange(len(self.buffers_y.get(ref_var, [])))
-            if len(x_data) == 0: return
-
-            idx = np.abs(x_data - mouse_point.x()).argmin()
-            if idx >= len(x_data): return
-            x_val = x_data[idx]
-
-            html = f"<div style='background-color: #333; color: white; padding: 8px; border-radius: 4px;'>"
-            if self.is_xy_plot:
-                html += f"<b>{self.x_axis_source}: {x_val:.2f}</b><br/>"
-            else:
-                # Get the actual timestamp from buffer_timestamps corresponding to this index
-                # The index should correspond to the position in the buffer
-                idx_int = int(round(idx))
-                if hasattr(self, 'buffer_timestamps') and len(self.buffer_timestamps) > 0:
-                    # Clamp index to valid range
-                    if idx_int < 0:
-                        timestamp = self.buffer_timestamps[0]
-                    elif idx_int >= len(self.buffer_timestamps):
-                        timestamp = self.buffer_timestamps[-1]
-                    else:
-                        timestamp = self.buffer_timestamps[idx_int]
-                    
-                    # Format timestamp as HH:MM:SS.mmm
-                    time_str = timestamp.strftime("%H:%M:%S.%f")[:-3]  # Remove last 3 digits of microseconds to get milliseconds
-                else:
-                    # Fallback: calculate time from index and comm_speed
-                    time_str = self.format_time_from_index(idx)
-                html += f"<b>Time: {time_str}</b><br/>"
-            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
-            for var in self.variables:
-                y_data = self.buffers_y.get(var)
-                if y_data and idx < len(y_data):
-                    y_val = y_data[idx]
-                    color = self.lines[var].opts['pen'].color().name()
-                    html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_val:.2f}</span><br/>"
-
-            # Delta (difference) between the two variables, only when exactly 2 variables
-            if len(self.variables) == 2:
-                y1_data = self.buffers_y.get(self.variables[0])
-                y2_data = self.buffers_y.get(self.variables[1])
-                if y1_data and y2_data and idx < len(y1_data) and idx < len(y2_data):
-                    try:
-                        v1, v2 = float(y1_data[idx]), float(y2_data[idx])
-                        if not (np.isnan(v1) or np.isnan(v2)):
-                            delta = v2 - v1
-                            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
-                            html += f"<span style='color: #FF9800; font-weight: bold;'>Delta ({self.variables[1]} − {self.variables[0]}): {delta:.2f}</span><br/>"
-                    except (ValueError, TypeError):
-                        pass
-
-            # Show recipe parameters only if enabled
-            if self.show_recipes_in_tooltip and self.recipe_params:
-                html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
-                html += "<b style='color: #FFEA00;'>Recipe Parameters:</b><br/>"
-                for param in self.recipe_params:
-                    value = self.latest_values_cache.get(param, "N/A")
-                    val_str = f"{value:.2f}" if isinstance(value, (float, int)) else str(value)
-                    html += f"<span style='color: #ccc;'>{param.replace('_', ' ')}:</span> <b>{val_str}</b><br/>"
-            html += "</div>"
-
-            self.tooltip.setHtml(html)
-            # Flip tooltip to the left when cursor is in the right portion so it stays visible
-            x_range = self.plot_widget.plotItem.vb.viewRange()[0]
-            x_min, x_max = x_range[0], x_range[1]
-            x_span = x_max - x_min
-            if x_span > 0 and mouse_point.x() > x_min + 0.65 * x_span:
-                self.tooltip.setAnchor((1, 1))  # right-bottom at cursor: tooltip extends left
-            else:
-                self.tooltip.setAnchor((0, 1))  # left-bottom at cursor: tooltip extends right
-            self.tooltip.setPos(mouse_point.x(), mouse_point.y())
-            self.tooltip.show()
-            self.crosshair_v.setPos(x_val)
-            self.crosshair_v.show()
-        else:
+        # Check mouse is over the plot (use plot widget scene rect so discrete and time behave the same)
+        if not self.plot_widget.sceneBoundingRect().contains(pos):
             self.tooltip.hide()
             self.crosshair_v.hide()
+            return
+        vb = self.plot_widget.plotItem.vb
+        mouse_point = vb.mapSceneToView(pos)
+        ref_var = self.variables[0] if self.variables else None
+        if not ref_var:
+            return
+        if self.is_xy_plot:
+            x_data = np.array(self.buffers_x.get(ref_var, []))
+        elif self.is_discrete_index and getattr(self, "discrete_index_linked_variable", None):
+            n_x = len(self.buffers_x_discrete)
+            n_y = len(self.buffers_y.get(ref_var, []))
+            min_len = min(n_x, n_y)
+            if min_len == 0:
+                self.tooltip.hide()
+                self.crosshair_v.hide()
+                return
+            x_data = np.array(list(self.buffers_x_discrete)[:min_len], dtype=float)
+        elif self.is_discrete_index:
+            n_pts = len(self.buffers_y.get(ref_var, []))
+            x_data = np.arange(1, n_pts + 1, dtype=float) if n_pts > 0 else np.array([])
+        else:
+            n_pts = len(self.buffers_y.get(ref_var, []))
+            x_data = np.arange(n_pts, dtype=float) if n_pts > 0 else np.array([])
+        if len(x_data) == 0:
+            self.tooltip.hide()
+            self.crosshair_v.hide()
+            return
+
+        idx = np.abs(x_data - mouse_point.x()).argmin()
+        if idx >= len(x_data):
+            return
+        x_val = x_data[idx]
+
+        html = f"<div style='background-color: #333; color: white; padding: 8px; border-radius: 4px;'>"
+        if self.is_xy_plot:
+            html += f"<b>{self.x_axis_source}: {x_val:.2f}</b><br/>"
+        elif self.is_discrete_index:
+            html += f"<b>Row: {int(x_val)}</b><br/>"
+        else:
+            # Get the actual timestamp from buffer_timestamps corresponding to this index
+            idx_int = int(round(idx))
+            if hasattr(self, 'buffer_timestamps') and len(self.buffer_timestamps) > 0:
+                if idx_int < 0:
+                    timestamp = self.buffer_timestamps[0]
+                elif idx_int >= len(self.buffer_timestamps):
+                    timestamp = self.buffer_timestamps[-1]
+                else:
+                    timestamp = self.buffer_timestamps[idx_int]
+                time_str = timestamp.strftime("%H:%M:%S.%f")[:-3]
+            else:
+                time_str = self.format_time_from_index(idx)
+            html += f"<b>Time: {time_str}</b><br/>"
+        html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+        for var in self.variables:
+            y_data = self.buffers_y.get(var)
+            if y_data and idx < len(y_data):
+                y_val = y_data[idx]
+                color = self.lines[var].opts['pen'].color().name()
+                html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_val:.2f}</span><br/>"
+
+        if len(self.variables) == 2:
+            y1_data = self.buffers_y.get(self.variables[0])
+            y2_data = self.buffers_y.get(self.variables[1])
+            if y1_data and y2_data and idx < len(y1_data) and idx < len(y2_data):
+                try:
+                    v1, v2 = float(y1_data[idx]), float(y2_data[idx])
+                    if not (np.isnan(v1) or np.isnan(v2)):
+                        delta = v2 - v1
+                        html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+                        html += f"<span style='color: #FF9800; font-weight: bold;'>Delta ({self.variables[1]} − {self.variables[0]}): {delta:.2f}</span><br/>"
+                except (ValueError, TypeError):
+                    pass
+
+        if self.show_recipes_in_tooltip and self.recipe_params:
+            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+            html += "<b style='color: #FFEA00;'>Recipe Parameters:</b><br/>"
+            for param in self.recipe_params:
+                value = self.latest_values_cache.get(param, "N/A")
+                val_str = f"{value:.2f}" if isinstance(value, (float, int)) else str(value)
+                html += f"<span style='color: #ccc;'>{param.replace('_', ' ')}:</span> <b>{val_str}</b><br/>"
+        html += "</div>"
+
+        self.tooltip.setHtml(html)
+        x_range = vb.viewRange()[0]
+        x_min, x_max = x_range[0], x_range[1]
+        x_span = x_max - x_min
+        if x_span > 0 and mouse_point.x() > x_min + 0.65 * x_span:
+            self.tooltip.setAnchor((1, 1))
+        else:
+            self.tooltip.setAnchor((0, 1))
+        self.tooltip.setPos(mouse_point.x(), mouse_point.y())
+        self.tooltip.show()
+        self.crosshair_v.setPos(x_val)
+        self.crosshair_v.show()
+
+
+class _GraphAreaWithBackground(QWidget):
+    """Widget that draws a highly transparent background image behind the graph area (not the menu)."""
+    def __init__(self, image_path, opacity=0.12, parent=None):
+        super().__init__(parent)
+        self._opacity = max(0.0, min(1.0, float(opacity)))
+        self._pixmap = QPixmap(image_path) if image_path and os.path.isfile(image_path) else QPixmap()
+        self.setStyleSheet("background-color: #1e1e1e;")  # base so gaps are dark
+
+    def paintEvent(self, event):
+        if self._pixmap.isNull():
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setOpacity(self._opacity)
+        scaled = self._pixmap.scaled(
+            self.size(),
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation
+        )
+        painter.drawPixmap(self.rect(), scaled)
+        painter.end()
+        super().paintEvent(event)
+
 
 class MainWindow(QMainWindow):
     data_signal = Signal(str, object)
@@ -1256,7 +1567,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ProAutomation Studio")
+        self.setWindowTitle("Dec ProAutomation Studio")
         self.resize(1280, 800)
         _icon = _app_icon()
         if not _icon.isNull():
@@ -1491,6 +1802,65 @@ class MainWindow(QMainWindow):
         connection_frame_layout.addWidget(self.connection_details_content)
         connection_frame_layout.addLayout(ip_connect_layout)
         connection_frame_layout.addLayout(speed_layout)
+
+        # Recording section (Snap7 only): when to record – time interval or variable change
+        self.recording_section = QWidget()
+        recording_layout = QVBoxLayout(self.recording_section)
+        recording_layout.setContentsMargins(0, 4, 0, 0)
+        recording_layout.setSpacing(6)
+        rec_ref_row = QHBoxLayout()
+        rec_ref_label = QLabel("Recording:")
+        rec_ref_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        rec_ref_label.setFixedWidth(_label_w)
+        rec_ref_label.setMinimumHeight(_row_h)
+        rec_ref_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.recording_ref_combo = QComboBox()
+        self.recording_ref_combo.addItem("Time (interval)", "time")
+        self.recording_ref_combo.addItem("Variable (on change)", "variable")
+        self.recording_ref_combo.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.recording_ref_combo.setMinimumHeight(_row_h)
+        self.recording_ref_combo.setToolTip("Time: record at fixed interval (min 100 ms). Variable: record only when selected variable changes (saves space).")
+        self.recording_ref_combo.currentIndexChanged.connect(self._on_recording_ref_changed)
+        rec_ref_row.addWidget(rec_ref_label)
+        rec_ref_row.addWidget(self.recording_ref_combo)
+        recording_layout.addLayout(rec_ref_row)
+        rec_interval_row = QHBoxLayout()
+        rec_interval_label = QLabel("Interval (ms):")
+        rec_interval_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        rec_interval_label.setFixedWidth(_label_w)
+        rec_interval_label.setMinimumHeight(_row_h)
+        rec_interval_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.recording_interval_ms = QSpinBox()
+        self.recording_interval_ms.setRange(100, 3600000)
+        self.recording_interval_ms.setValue(500)
+        self.recording_interval_ms.setSuffix(" ms")
+        self.recording_interval_ms.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.recording_interval_ms.setMinimumHeight(_row_h)
+        self.recording_interval_ms.setToolTip("Minimum 100 ms when recording by time.")
+        rec_interval_row.addWidget(rec_interval_label)
+        rec_interval_row.addWidget(self.recording_interval_ms)
+        self.recording_interval_row_widget = QWidget()
+        self.recording_interval_row_widget.setLayout(rec_interval_row)
+        recording_layout.addWidget(self.recording_interval_row_widget)
+        rec_trigger_row = QHBoxLayout()
+        rec_trigger_label = QLabel("Trigger var:")
+        rec_trigger_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        rec_trigger_label.setFixedWidth(_label_w)
+        rec_trigger_label.setMinimumHeight(_row_h)
+        rec_trigger_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.recording_trigger_combo = QComboBox()
+        self.recording_trigger_combo.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.recording_trigger_combo.setMinimumHeight(_row_h)
+        self.recording_trigger_combo.setToolTip("Record all variables and recipes when this variable changes (e.g. dose counter).")
+        rec_trigger_row.addWidget(rec_trigger_label)
+        rec_trigger_row.addWidget(self.recording_trigger_combo)
+        self.recording_trigger_row_widget = QWidget()
+        self.recording_trigger_row_widget.setLayout(rec_trigger_row)
+        self.recording_trigger_row_widget.setVisible(False)
+        recording_layout.addWidget(self.recording_trigger_row_widget)
+        connection_frame_layout.addWidget(self.recording_section)
+        self.recording_section.setVisible(False)
+
         online_layout.addWidget(connection_frame)
 
         # PLC Trigger section: same framed style as CONNECTION (match exactly)
@@ -1627,11 +1997,19 @@ class MainWindow(QMainWindow):
 
         self.splitter.addWidget(self.sidebar)
 
+        # Graph area: background image (highly transparent) behind scroll area
+        _base = os.path.dirname(os.path.abspath(__file__))
+        _bg_path = os.path.join(_base, "Images", "dec_background_endToEnd_bottomRight.png")
+        self.graph_area_widget = _GraphAreaWithBackground(_bg_path, opacity=0.12, parent=self)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
+        self.scroll_area.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; } "
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
         self.scroll_content = QWidget()
-        self.scroll_content.setStyleSheet("background-color: #1e1e1e;")
+        self.scroll_content.setStyleSheet("background-color: transparent;")
+        self.scroll_content.setAttribute(Qt.WA_TranslucentBackground, True)
         self.graphs_layout = QVBoxLayout(self.scroll_content)
         self.graphs_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -1642,7 +2020,10 @@ class MainWindow(QMainWindow):
         self.graphs_layout.addWidget(self.graph_splitter)
 
         self.scroll_area.setWidget(self.scroll_content)
-        self.splitter.addWidget(self.scroll_area)
+        layout = QVBoxLayout(self.graph_area_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.scroll_area)
+        self.splitter.addWidget(self.graph_area_widget)
         self.splitter.setSizes([300, 980])
 
         self.graphs = []
@@ -1943,8 +2324,14 @@ class MainWindow(QMainWindow):
         if device_type == "Simulation":
             self.address_row.setVisible(False)
             self.pc_ip_row.setVisible(False)
+            self.recording_section.setVisible(False)
         else:
             self.address_row.setVisible(True)
+            if device_type == "Snap7":
+                self.recording_section.setVisible(True)
+                self._on_recording_ref_changed()
+            else:
+                self.recording_section.setVisible(False)
             if device_type == "ADS":
                 self.address_label.setText("Target (PLC):")
                 self.ip_input.setPlaceholderText("192.168.1.10.1.1")
@@ -1953,6 +2340,12 @@ class MainWindow(QMainWindow):
                 self.address_label.setText("IP:")
                 self.ip_input.setPlaceholderText("192.168.0.20")
                 self.pc_ip_row.setVisible(False)
+
+    def _on_recording_ref_changed(self):
+        """Show interval (ms) when Time, or trigger variable when Variable."""
+        ref = self.recording_ref_combo.currentData() or "time"
+        self.recording_interval_row_widget.setVisible(ref == "time")
+        self.recording_trigger_row_widget.setVisible(ref == "variable")
 
     def load_offline_csv(self):
         """Load a user-selected CSV into DuckDB and populate variable list for offline plotting."""
@@ -2054,6 +2447,32 @@ class MainWindow(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "Invalid Speed", "Please enter a valid positive number for communication speed (e.g., 0.05)")
             return
+
+        # Recording params (Snap7 only): validate interval >= 100 ms and trigger variable when Variable
+        recording_reference = "time"
+        recording_interval_sec = 0.5
+        recording_trigger_variable = None
+        if device_type == "Snap7" and getattr(self, "recording_section", None) and self.recording_section.isVisible():
+            ref = self.recording_ref_combo.currentData() or "time"
+            recording_reference = ref
+            if ref == "time":
+                interval_ms = self.recording_interval_ms.value()
+                if interval_ms < 100:
+                    QMessageBox.warning(
+                        self, "Recording interval",
+                        "Recording interval must be at least 100 ms when using Time (interval)."
+                    )
+                    return
+                recording_interval_sec = interval_ms / 1000.0
+            else:
+                trigger_text = (self.recording_trigger_combo.currentText() or "").strip()
+                if not trigger_text or trigger_text.startswith("("):
+                    QMessageBox.warning(
+                        self, "Recording trigger",
+                        "Select a variable for 'Variable (on change)' recording, or load variables first."
+                    )
+                    return
+                recording_trigger_variable = trigger_text
         
         # Clear graph buffers before connecting
         for graph in self.graphs:
@@ -2089,15 +2508,22 @@ class MainWindow(QMainWindow):
         elif device_type == "ADS":
             self.plc_thread = None
             self.simulator_thread = None
+            # Request exchange + recipe vars so tooltip can show recipe params; plot list stays exchange-only
+            vars_to_read = list(self.all_variables) + [p for p in self.recipe_params if p not in self.all_variables]
             self.ads_thread = PLCADSThread(
                 address, self.data_signal, self.status_signal, comm_speed,
-                local_address=pc_ip, variable_names=list(self.all_variables)
+                local_address=pc_ip, variable_names=vars_to_read
             )
             self.ads_thread.start()
         else:
             self.simulator_thread = None
             self.ads_thread = None
-            self.plc_thread = PLCThread(address, self.data_signal, self.status_signal, comm_speed)
+            self.plc_thread = PLCThread(
+                address, self.data_signal, self.status_signal, comm_speed,
+                recording_reference=recording_reference,
+                recording_interval_sec=recording_interval_sec,
+                recording_trigger_variable=recording_trigger_variable,
+            )
             self.plc_thread.start()
         
         # Update button states
@@ -2232,9 +2658,6 @@ class MainWindow(QMainWindow):
         
         for key in self.latest_values:
             self.latest_values[key] = 0.0
-        
-        msg = "Successfully disconnected from simulation." if was_simulation else "Successfully disconnected from PLC."
-        QMessageBox.information(self, "Disconnected", msg)
 
     @Slot(str, str, object)
     def update_comm_status(self, status_type, message, details):
@@ -2637,6 +3060,13 @@ class MainWindow(QMainWindow):
                 self.latest_values[var_name] = 0.0
         self.var_list.clear()
         self.var_list.addItems(self.all_variables)
+        # Populate recording trigger combo (Snap7: record when this variable changes)
+        self.recording_trigger_combo.clear()
+        all_for_trigger = list(self.all_variables) + [p for p in self.recipe_params if p not in self.all_variables]
+        if all_for_trigger:
+            self.recording_trigger_combo.addItems(all_for_trigger)
+        else:
+            self.recording_trigger_combo.addItem("(load variables first)", None)
 
     def _quote_duckdb_identifier(self, name):
         """Quote identifier for DuckDB (handles spaces and special chars)."""
@@ -2680,7 +3110,13 @@ class MainWindow(QMainWindow):
         if is_offline:
             # Offline: query DuckDB, create graph, set static data
             x_col = settings['x_axis']
-            cols = [x_col] + [v for v in var_names if v != x_col]
+            use_discrete_index = (x_col == "Discrete index (1, 2, 3…)")
+            if use_discrete_index:
+                cols = list(var_names)
+                x_data_for_static = None
+            else:
+                cols = [x_col] + [v for v in var_names if v != x_col]
+                x_data_for_static = None
             try:
                 quoted = [self._quote_duckdb_identifier(c) for c in cols]
                 sql = f"SELECT {', '.join(quoted)} FROM offline_data"
@@ -2707,6 +3143,7 @@ class MainWindow(QMainWindow):
                 y_axis_mode=settings.get("y_axis_mode", "auto"),
                 y_axis_assignments=settings.get("y_axis_assignments"),
                 display_deadband=settings.get("display_deadband", 0),
+                discrete_index_linked_variable=settings.get("discrete_index_linked_variable"),
             )
             vbox.addWidget(new_graph)
             container.lbl_title = lbl_title
@@ -2716,9 +3153,10 @@ class MainWindow(QMainWindow):
             self.graphs.append(new_graph)
             btn_close.clicked.connect(lambda: self.remove_graph(container, new_graph))
             col_index = {name: i for i, name in enumerate(cols)}
-            x_data = [row[0] for row in result]
+            if not use_discrete_index:
+                x_data_for_static = [row[0] for row in result]
             y_series = {v: [row[col_index[v]] for row in result] for v in var_names if v in col_index}
-            new_graph.set_static_data(x_data, y_series)
+            new_graph.set_static_data(x_data_for_static, y_series)
             return
 
         # Online: use buffer_size and other options from GraphConfigDialog
@@ -2751,6 +3189,7 @@ class MainWindow(QMainWindow):
             y_axis_mode=settings.get("y_axis_mode", "auto"),
             y_axis_assignments=settings.get("y_axis_assignments"),
             display_deadband=settings.get("display_deadband", 0),
+            discrete_index_linked_variable=settings.get("discrete_index_linked_variable"),
         )
         vbox.addWidget(new_graph)
         container.lbl_title = lbl_title
@@ -2792,9 +3231,13 @@ class MainWindow(QMainWindow):
             
             # Update all graphs that use this variable
             for graph in self.graphs:
-                if variable_name in graph.variables or variable_name == graph.x_axis_source:
-                    # Plot all array values at once
-                    graph.update_data_array(variable_name, numeric_array)
+                if variable_name in graph.variables or variable_name == graph.x_axis_source or variable_name == getattr(graph, "discrete_index_linked_variable", None):
+                    # Plot all array values at once (linked variable as array: each element = one step)
+                    if variable_name == getattr(graph, "discrete_index_linked_variable", None):
+                        for v in numeric_array:
+                            graph.update_data(variable_name, v)
+                    else:
+                        graph.update_data_array(variable_name, numeric_array)
         else:
             # Handle scalar values (original behavior)
             try:
@@ -2806,17 +3249,18 @@ class MainWindow(QMainWindow):
             except (ValueError, TypeError):
                 # Skip non-numeric values
                 return
-            
+
             self.latest_values[variable_name] = value
             for graph in self.graphs:
-                if variable_name in graph.variables or variable_name == graph.x_axis_source:
-                    x_val = self.latest_values.get(graph.x_axis_source, 0.0) if graph.is_xy_plot else None
-                    # Ensure x_val is numeric if provided
-                    if x_val is not None:
-                        try:
-                            x_val = float(x_val)
-                        except (ValueError, TypeError):
-                            x_val = 0.0
+                if variable_name in graph.variables or variable_name == graph.x_axis_source or variable_name == getattr(graph, "discrete_index_linked_variable", None):
+                    x_val = None
+                    if graph.is_xy_plot:
+                        x_val = self.latest_values.get(graph.x_axis_source, 0.0)
+                        if x_val is not None:
+                            try:
+                                x_val = float(x_val)
+                            except (ValueError, TypeError):
+                                x_val = 0.0
                     graph.update_data(variable_name, value, x_value=x_val)
 
     def toggle_pause(self):
@@ -2917,6 +3361,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save_last_config()
+        # Get recording DB path before stopping thread (Snap7 only)
+        db_path = None
+        if self.plc_thread:
+            db_path = getattr(self.plc_thread, "db_path", None)
+        if not db_path:
+            _ext = os.path.join(os.path.dirname(__file__), "external")
+            db_path = os.path.join(_ext, "automation_data.db")
         if self.simulator_thread and self.simulator_thread.isRunning():
             self.simulator_thread._is_running = False
             self.simulator_thread.wait(2000)
@@ -2926,11 +3377,42 @@ class MainWindow(QMainWindow):
         if self.plc_thread and self.plc_thread.is_alive():
             self.plc_thread.stop()
             self.plc_thread.join(timeout=2.0)
-        if self.plc_thread and getattr(self.plc_thread, 'db_connection', None):
+        if self.plc_thread and getattr(self.plc_thread, "db_connection", None):
             try:
                 self.plc_thread.db_connection.close()
             except Exception:
                 pass
+        # If recording DB has data, ask to export then truncate
+        if db_path and recording_has_data(db_path):
+            reply = QMessageBox.question(
+                self,
+                "Export recording?",
+                "Recording data will be deleted on exit. Export to CSV before closing?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                t_min, t_max = get_recording_time_range(db_path)
+                export_dlg = ExportRecordingDialog(db_path, t_min, t_max, self)
+                if export_dlg.exec() == QDialog.Accepted:
+                    from_dt, to_dt, interval_sec = export_dlg.get_from_to_interval()
+                    path, _ = QFileDialog.getSaveFileName(
+                        self, "Export recording to CSV", "", "CSV (*.csv);;All files (*)"
+                    )
+                    if path:
+                        try:
+                            n = export_recording_to_csv(db_path, from_dt, to_dt, interval_sec, path)
+                            QMessageBox.information(
+                                self, "Export done", f"Exported {n} rows to {path}"
+                            )
+                        except Exception as e:
+                            logging.exception("Export recording failed")
+                            QMessageBox.warning(
+                                self, "Export failed", f"Export failed:\n{e}"
+                            )
+                    truncate_recording_db(db_path)
+            else:
+                truncate_recording_db(db_path)
         if self.offline_db:
             try:
                 self.offline_db.close()
