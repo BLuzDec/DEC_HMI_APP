@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QDialog, QComboBox, QDialogButtonBox, QFormLayout,
                                QCheckBox, QLineEdit, QMessageBox, QFileDialog,
                                QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView,
-                               QDoubleSpinBox, QSpinBox, QDateTimeEdit)
+                               QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton)
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
 import pyqtgraph as pg
@@ -21,6 +21,23 @@ from external.plc_thread import PLCThread
 from external.plc_ads_thread import PLCADSThread
 from external.plc_simulator import PLCSimulator
 from external.variable_loader import load_exchange_and_recipes
+from external.analytics_window import AnalyticsWindow
+
+
+# Color palette for limit lines (user can choose from these)
+LIMIT_LINE_COLORS = [
+    ("#FF5252", "Red"),
+    ("#FF9800", "Orange"),
+    ("#FFEB3B", "Yellow"),
+    ("#4CAF50", "Green"),
+    ("#00BCD4", "Cyan"),
+    ("#2196F3", "Blue"),
+    ("#9C27B0", "Purple"),
+    ("#E91E63", "Pink"),
+    ("#795548", "Brown"),
+    ("#FFFFFF", "White"),
+    ("#9E9E9E", "Gray"),
+]
 
 
 def _app_icon():
@@ -61,7 +78,8 @@ class GraphConfigDialog(QDialog):
         if not _icon.isNull():
             self.setWindowIcon(_icon)
         self.setWindowTitle("Graph Configuration")
-        self.resize(380, 420)
+        
+        self.resize(480, 560)  # Larger to fit limit lines section
         self.setStyleSheet("""
             QDialog { background-color: #333; color: white; }
             QLabel { color: white; font-size: 14px; }
@@ -72,6 +90,8 @@ class GraphConfigDialog(QDialog):
                 background-color: #007ACC; color: white; padding: 8px 15px; border: none;
             }
             QPushButton:hover { background-color: #0098FF; }
+            QGroupBox { color: white; border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
         """)
 
         layout = QVBoxLayout(self)
@@ -112,8 +132,8 @@ class GraphConfigDialog(QDialog):
         self._on_x_axis_changed(self.combo_x_axis.currentText())
 
         # Buffer size (per graph)
-        self.buffer_size_edit = QLineEdit("5000")
-        self.buffer_size_edit.setPlaceholderText("5000")
+        self.buffer_size_edit = QLineEdit("100000")
+        self.buffer_size_edit.setPlaceholderText("100000")
         self.buffer_size_edit.setToolTip("Number of data points to keep for this graph. Array variables may scale this automatically.")
         form_layout.addRow("Buffer size:", self.buffer_size_edit)
 
@@ -165,6 +185,79 @@ class GraphConfigDialog(QDialog):
 
         layout.addLayout(form_layout)
 
+        # --- Limit Lines Section ---
+        limits_group = QGroupBox("Limit Lines (dashed horizontal lines)")
+        limits_group.setStyleSheet("""
+            QGroupBox { color: white; border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+        """)
+        limits_layout = QFormLayout(limits_group)
+        
+        # Helper to create limit row (type selector, value/variable, color)
+        def create_limit_row(label, default_color_idx=0):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Type: None / Fixed / Variable
+            type_combo = QComboBox()
+            type_combo.addItem("None", "none")
+            type_combo.addItem("Fixed value", "fixed")
+            type_combo.addItem("Variable", "variable")
+            type_combo.setFixedWidth(100)
+            row_layout.addWidget(type_combo)
+            
+            # Fixed value input
+            value_spin = QDoubleSpinBox()
+            value_spin.setRange(-1e9, 1e9)
+            value_spin.setDecimals(4)
+            value_spin.setValue(0.0)
+            value_spin.setFixedWidth(100)
+            value_spin.setVisible(False)
+            row_layout.addWidget(value_spin)
+            
+            # Variable selector
+            var_combo = QComboBox()
+            var_combo.setMaxVisibleItems(12)
+            for var in variable_list:
+                var_combo.addItem(var)
+            var_combo.setFixedWidth(180)
+            var_combo.setVisible(False)
+            row_layout.addWidget(var_combo)
+            
+            # Color selector
+            color_combo = QComboBox()
+            for hex_color, name in LIMIT_LINE_COLORS:
+                color_combo.addItem(name, hex_color)
+            color_combo.setCurrentIndex(default_color_idx)
+            color_combo.setFixedWidth(80)
+            color_combo.setVisible(False)
+            row_layout.addWidget(color_combo)
+            
+            row_layout.addStretch()
+            
+            # Connect type change to show/hide widgets
+            def on_type_changed(text):
+                is_fixed = type_combo.currentData() == "fixed"
+                is_var = type_combo.currentData() == "variable"
+                value_spin.setVisible(is_fixed)
+                var_combo.setVisible(is_var)
+                color_combo.setVisible(is_fixed or is_var)
+            
+            type_combo.currentTextChanged.connect(on_type_changed)
+            
+            return row_widget, type_combo, value_spin, var_combo, color_combo
+        
+        # Limit High
+        self.limit_high_widget, self.limit_high_type, self.limit_high_value, self.limit_high_var, self.limit_high_color = create_limit_row("Limit High", 0)  # Red
+        limits_layout.addRow("Limit High:", self.limit_high_widget)
+        
+        # Limit Low
+        self.limit_low_widget, self.limit_low_type, self.limit_low_value, self.limit_low_var, self.limit_low_color = create_limit_row("Limit Low", 6)  # Purple
+        limits_layout.addRow("Limit Low:", self.limit_low_widget)
+        
+        layout.addWidget(limits_group)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -187,12 +280,12 @@ class GraphConfigDialog(QDialog):
     def get_settings(self):
         out = {
             "x_axis": self.combo_x_axis.currentText(),
-            "buffer_size": 5000,
+            "buffer_size": 100000,
             "graph_title": self.title_edit.text().strip() if hasattr(self, "title_edit") else "",
             "display_deadband": self.deadband_spin.value() if hasattr(self, "deadband_spin") else 0.0,
         }
         try:
-            out["buffer_size"] = max(100, min(500000, int(self.buffer_size_edit.text().strip() or "5000")))
+            out["buffer_size"] = max(100, min(500000, int(self.buffer_size_edit.text().strip() or "100000")))
         except ValueError:
             pass
         if hasattr(self, "y_axis_mode_combo") and self.y_axis_mode_combo is not None:
@@ -209,6 +302,23 @@ class GraphConfigDialog(QDialog):
             linked = self.combo_linked_var.currentData()
             if linked:
                 out["discrete_index_linked_variable"] = linked
+        
+        # Limit lines settings
+        def get_limit_settings(type_combo, value_spin, var_combo, color_combo):
+            limit_type = type_combo.currentData()
+            if limit_type == "none":
+                return {"enabled": False}
+            return {
+                "enabled": True,
+                "type": limit_type,
+                "value": value_spin.value() if limit_type == "fixed" else None,
+                "variable": var_combo.currentText() if limit_type == "variable" else None,
+                "color": color_combo.currentData(),
+            }
+        
+        out["limit_high"] = get_limit_settings(self.limit_high_type, self.limit_high_value, self.limit_high_var, self.limit_high_color)
+        out["limit_low"] = get_limit_settings(self.limit_low_type, self.limit_low_value, self.limit_low_var, self.limit_low_color)
+        
         return out
 
 class RangeAxisSpinBox(QDoubleSpinBox):
@@ -233,16 +343,18 @@ class RangeAxisSpinBox(QDoubleSpinBox):
 
 
 class RangeConfigDialog(QDialog):
-    """Dialog to configure Min/Max ranges for axes, plus buffer size, title, and deadband."""
+    """Dialog to configure Min/Max ranges for axes, plus buffer size, title, deadband, and limit lines."""
     def __init__(self, current_settings, has_dual_y=False, show_recipes=True, has_two_variables=False, show_delta=False, parent=None,
-                 buffer_size=5000, graph_title="", graph_default_title="", display_deadband=0.0):
+                 buffer_size=100000, graph_title="", graph_default_title="", display_deadband=0.0,
+                 limit_high=None, limit_low=None, variable_list=None):
         super().__init__(parent)
+        self._variable_list = variable_list or []
         _icon = _app_icon()
         if not _icon.isNull():
             self.setWindowIcon(_icon)
         self.setWindowTitle("Axis Range Settings")
         self.setModal(True)
-        self.resize(420, 320)
+        self.resize(480, 480)  # Larger to fit limit lines
         self.setStyleSheet("""
             QDialog { background-color: #333; color: white; }
             QLabel { color: white; }
@@ -254,6 +366,11 @@ class RangeConfigDialog(QDialog):
                 background-color: #007ACC; color: white; padding: 6px 12px; border: none;
             }
             QPushButton:hover { background-color: #0098FF; }
+            QComboBox {
+                background-color: #444; color: white; border: 1px solid #555; padding: 2px;
+            }
+            QGroupBox { color: white; border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
         """)
         self.current_settings = current_settings
         layout = QVBoxLayout(self)
@@ -369,6 +486,98 @@ class RangeConfigDialog(QDialog):
         deadband_row.addWidget(self.deadband_spin)
         deadband_row.addStretch()
         layout.addLayout(deadband_row)
+
+        # --- Limit Lines Section ---
+        limits_group = QGroupBox("Limit Lines (dashed horizontal lines)")
+        limits_layout = QFormLayout(limits_group)
+        
+        # Helper to create limit row (type selector, value/variable, color)
+        def create_limit_row(label, existing_settings, default_color_idx=0):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Type: None / Fixed / Variable
+            type_combo = QComboBox()
+            type_combo.addItem("None", "none")
+            type_combo.addItem("Fixed value", "fixed")
+            type_combo.addItem("Variable", "variable")
+            type_combo.setFixedWidth(100)
+            
+            # Set current type from existing settings
+            if existing_settings and existing_settings.get("enabled"):
+                limit_type = existing_settings.get("type", "none")
+                idx = {"none": 0, "fixed": 1, "variable": 2}.get(limit_type, 0)
+                type_combo.setCurrentIndex(idx)
+            
+            row_layout.addWidget(type_combo)
+            
+            # Fixed value input
+            value_spin = RangeAxisSpinBox()
+            value_spin.setRange(-1e9, 1e9)
+            value_spin.setDecimals(4)
+            if existing_settings and existing_settings.get("type") == "fixed":
+                value_spin.setValue(existing_settings.get("value", 0.0))
+            else:
+                value_spin.setValue(0.0)
+            value_spin.setFixedWidth(100)
+            value_spin.setStyleSheet("background-color: #444; color: white; border: 1px solid #555;")
+            row_layout.addWidget(value_spin)
+            
+            # Variable selector
+            var_combo = QComboBox()
+            var_combo.setMaxVisibleItems(12)
+            for var in self._variable_list:
+                var_combo.addItem(var)
+            var_combo.setFixedWidth(180)
+            # Set current variable from existing settings
+            if existing_settings and existing_settings.get("type") == "variable":
+                var_name = existing_settings.get("variable", "")
+                idx = var_combo.findText(var_name)
+                if idx >= 0:
+                    var_combo.setCurrentIndex(idx)
+            row_layout.addWidget(var_combo)
+            
+            # Color selector
+            color_combo = QComboBox()
+            for hex_color, name in LIMIT_LINE_COLORS:
+                color_combo.addItem(name, hex_color)
+            # Set current color from existing settings
+            if existing_settings and existing_settings.get("enabled"):
+                current_color = existing_settings.get("color", "")
+                for i, (hex_color, _) in enumerate(LIMIT_LINE_COLORS):
+                    if hex_color == current_color:
+                        color_combo.setCurrentIndex(i)
+                        break
+            else:
+                color_combo.setCurrentIndex(default_color_idx)
+            color_combo.setFixedWidth(80)
+            row_layout.addWidget(color_combo)
+            
+            row_layout.addStretch()
+            
+            # Connect type change to show/hide widgets
+            def on_type_changed():
+                is_fixed = type_combo.currentData() == "fixed"
+                is_var = type_combo.currentData() == "variable"
+                value_spin.setVisible(is_fixed)
+                var_combo.setVisible(is_var)
+                color_combo.setVisible(is_fixed or is_var)
+            
+            type_combo.currentTextChanged.connect(on_type_changed)
+            on_type_changed()  # Initialize visibility
+            
+            return row_widget, type_combo, value_spin, var_combo, color_combo
+        
+        # Limit High
+        self.limit_high_widget, self.limit_high_type, self.limit_high_value, self.limit_high_var, self.limit_high_color = create_limit_row("Limit High", limit_high, 0)  # Red
+        limits_layout.addRow("Limit High:", self.limit_high_widget)
+        
+        # Limit Low
+        self.limit_low_widget, self.limit_low_type, self.limit_low_value, self.limit_low_var, self.limit_low_color = create_limit_row("Limit Low", limit_low, 6)  # Purple
+        limits_layout.addRow("Limit Low:", self.limit_low_widget)
+        
+        layout.addWidget(limits_group)
         
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -386,11 +595,28 @@ class RangeConfigDialog(QDialog):
              settings["y2"] = {"auto": self.chk_y2_auto.isChecked(), "min": self.spin_y2_min.value(), "max": self.spin_y2_max.value()}
              settings["aligned_y_padding_percent"] = self.spin_aligned_padding.value() if self.spin_aligned_padding else 5.0
         try:
-            settings["buffer_size"] = max(100, min(500000, int(self.buffer_size_edit.text().strip() or "5000")))
+            settings["buffer_size"] = max(100, min(500000, int(self.buffer_size_edit.text().strip() or "100000")))
         except ValueError:
-            settings["buffer_size"] = 5000
+            settings["buffer_size"] = 100000
         settings["graph_title"] = self.title_edit.text().strip() if hasattr(self, "title_edit") else ""
         settings["display_deadband"] = self.deadband_spin.value() if hasattr(self, "deadband_spin") else 0.0
+        
+        # Limit lines settings
+        def get_limit_settings(type_combo, value_spin, var_combo, color_combo):
+            limit_type = type_combo.currentData()
+            if limit_type == "none":
+                return {"enabled": False}
+            return {
+                "enabled": True,
+                "type": limit_type,
+                "value": value_spin.value() if limit_type == "fixed" else None,
+                "variable": var_combo.currentText() if limit_type == "variable" else None,
+                "color": color_combo.currentData(),
+            }
+        
+        settings["limit_high"] = get_limit_settings(self.limit_high_type, self.limit_high_value, self.limit_high_var, self.limit_high_color)
+        settings["limit_low"] = get_limit_settings(self.limit_low_type, self.limit_low_value, self.limit_low_var, self.limit_low_color)
+        
         return settings
 
 
@@ -545,10 +771,11 @@ def recording_has_data(db_path):
 class DynamicPlotWidget(QWidget):
     """
     A wrapper around pyqtgraph.PlotWidget that manages its own data lines.
-    Supports dual Y-axes, XY plotting, live value headers, and hover inspection.
+    Supports dual Y-axes, XY plotting, live value headers, hover inspection, and limit lines.
     """
-    def __init__(self, variable_names, x_axis_source="Time (Index)", buffer_size=500, recipe_params=None, latest_values_cache=None, variable_metadata=None, comm_speed=0.05,
-                 graph_title="", y_axis_mode="auto", y_axis_assignments=None, display_deadband=0.0, discrete_index_linked_variable=None):
+    def __init__(self, variable_names, x_axis_source="Time (Index)", buffer_size=100000, recipe_params=None, latest_values_cache=None, variable_metadata=None, comm_speed=0.05,
+                 graph_title="", y_axis_mode="auto", y_axis_assignments=None, display_deadband=0.0, discrete_index_linked_variable=None,
+                 limit_high=None, limit_low=None, all_variable_list=None):
         super().__init__()
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0,0,0,0)
@@ -571,6 +798,13 @@ class DynamicPlotWidget(QWidget):
         self.display_deadband = float(display_deadband) if display_deadband else 0.0
         self.y_axis_mode = y_axis_mode  # for 2 vars: "auto" | "same" | "dual"
         self._y_axis_assignments = y_axis_assignments or {}  # for 3+ vars: {var: "y1"|"y2"}
+        
+        # Limit lines settings
+        self.limit_high_settings = limit_high or {"enabled": False}
+        self.limit_low_settings = limit_low or {"enabled": False}
+        self._all_variable_list = all_variable_list or []
+        self._limit_high_line = None
+        self._limit_low_line = None
         
         # Track start time for time-based graphs
         self.start_time = datetime.now()
@@ -643,15 +877,21 @@ class DynamicPlotWidget(QWidget):
         self.plot_widget.getAxis('bottom').setPen('#888')
         self.plot_widget.getAxis('left').setTextPen('#aaa')
         self.plot_widget.getAxis('bottom').setTextPen('#aaa')
+        # Disable SI prefix scaling (e.g. showing 385 x0.001 instead of 0.385)
+        self.plot_widget.getAxis('left').enableAutoSIPrefix(False)
+        self.plot_widget.getAxis('bottom').enableAutoSIPrefix(False)
         if self.is_xy_plot:
             self.plot_widget.setLabel('bottom', self.x_axis_source)
         elif self.is_discrete_index:
-            self.plot_widget.setLabel('bottom', 'Row index')
+            self.plot_widget.setLabel('bottom', 'Index')
         else:
             self.plot_widget.setLabel('bottom', 'Time (MM:SS.mmm)')
         # Set up time formatter for x-axis only when using Time (Index)
         if not self.is_xy_plot and not self.is_discrete_index:
             self.setup_time_formatter()
+
+        # Hover tooltip and crosshair for all plot types (time, discrete index, XY)
+        self._setup_plot_hover()
 
         self.lines = {}
         self.buffers_y = {}
@@ -756,6 +996,67 @@ class DynamicPlotWidget(QWidget):
         elif hasattr(vb, "sigXRangeChanged"):
             vb.sigXRangeChanged.connect(self._on_x_range_changed)
 
+        # Set up limit lines (dashed horizontal lines)
+        self._setup_limit_lines()
+
+    def _setup_limit_lines(self):
+        """Set up horizontal dashed limit lines for Limit High and Limit Low."""
+        # Remove existing limit lines if any
+        if self._limit_high_line:
+            self.plot_widget.removeItem(self._limit_high_line)
+            self._limit_high_line = None
+        if self._limit_low_line:
+            self.plot_widget.removeItem(self._limit_low_line)
+            self._limit_low_line = None
+        
+        # Create Limit High line
+        if self.limit_high_settings.get("enabled"):
+            color = self.limit_high_settings.get("color", "#FF5252")
+            pen = pg.mkPen(color, width=2, style=Qt.DashLine)
+            self._limit_high_line = pg.InfiniteLine(angle=0, movable=False, pen=pen)
+            self._limit_high_line.setZValue(0.5)  # Below data lines
+            self.plot_widget.addItem(self._limit_high_line, ignoreBounds=True)
+            
+            # Set initial position
+            if self.limit_high_settings.get("type") == "fixed":
+                self._limit_high_line.setValue(self.limit_high_settings.get("value", 0))
+            # Variable-based: will be updated in update_value()
+        
+        # Create Limit Low line
+        if self.limit_low_settings.get("enabled"):
+            color = self.limit_low_settings.get("color", "#9C27B0")
+            pen = pg.mkPen(color, width=2, style=Qt.DashLine)
+            self._limit_low_line = pg.InfiniteLine(angle=0, movable=False, pen=pen)
+            self._limit_low_line.setZValue(0.5)  # Below data lines
+            self.plot_widget.addItem(self._limit_low_line, ignoreBounds=True)
+            
+            # Set initial position
+            if self.limit_low_settings.get("type") == "fixed":
+                self._limit_low_line.setValue(self.limit_low_settings.get("value", 0))
+            # Variable-based: will be updated in update_value()
+
+    def _update_limit_lines_from_variables(self, data_dict):
+        """Update variable-based limit lines when data is received."""
+        # Update Limit High from variable
+        if self._limit_high_line and self.limit_high_settings.get("type") == "variable":
+            var_name = self.limit_high_settings.get("variable")
+            if var_name and var_name in data_dict:
+                try:
+                    val = float(data_dict[var_name])
+                    self._limit_high_line.setValue(val)
+                except (ValueError, TypeError):
+                    pass
+        
+        # Update Limit Low from variable
+        if self._limit_low_line and self.limit_low_settings.get("type") == "variable":
+            var_name = self.limit_low_settings.get("variable")
+            if var_name and var_name in data_dict:
+                try:
+                    val = float(data_dict[var_name])
+                    self._limit_low_line.setValue(val)
+                except (ValueError, TypeError):
+                    pass
+
     def _on_x_range_changed_manually(self, *args):
         """User zoomed or panned (1-button mode or scroll) – stop auto-following X."""
         if not self.is_xy_plot:
@@ -854,7 +1155,7 @@ class DynamicPlotWidget(QWidget):
         return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
     
     def setup_time_formatter(self):
-        """Set up custom formatter for time axis"""
+        """Set up custom formatter for time axis (Time (Index) only)."""
         class TimeAxisItem(pg.AxisItem):
             def __init__(self, widget, *args, **kwargs):
                 super().__init__(*args, **kwargs)
@@ -871,6 +1172,8 @@ class DynamicPlotWidget(QWidget):
         time_axis = TimeAxisItem(self, orientation='bottom')
         self.plot_widget.plotItem.setAxisItems({'bottom': time_axis})
 
+    def _setup_plot_hover(self):
+        """Set up hover tooltip and crosshair for all plot types (time, discrete index, XY)."""
         self.crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('gray', style=Qt.DashLine))
         self.tooltip = pg.TextItem(anchor=(0, 1), color='#ddd', fill=QColor(0, 0, 0, 150))
         self.tooltip.setZValue(2)
@@ -923,6 +1226,7 @@ class DynamicPlotWidget(QWidget):
         p1.getAxis('right').setLabel(label2, color=color_right)
         p1.getAxis('right').setPen(color_right)
         p1.getAxis('right').setTextPen(color_right)
+        p1.getAxis('right').enableAutoSIPrefix(False)  # Show actual values, not scaled
         for i, var in enumerate(right_vars):
             self._add_variable(var, self.colors[(len(left_vars) + i) % len(self.colors)], self.p2)
         # Delta line (var2 - var1) only when exactly 2 variables
@@ -943,6 +1247,17 @@ class DynamicPlotWidget(QWidget):
     def _display_label(self, var_name):
         """Return display label for variable (Name [Unit] or variable id)."""
         return self.variable_metadata.get(var_name, {}).get("display_label", var_name)
+
+    def _format_value(self, var_name, value):
+        """Format a value with the variable's decimals (from CSV Decimals column; default 2)."""
+        if value is None:
+            return "N/A"
+        try:
+            v = float(value)
+            decimals = self.variable_metadata.get(var_name, {}).get("decimals", 2)
+            return f"{v:.{decimals}f}"
+        except (ValueError, TypeError):
+            return str(value)
 
     def set_buffer_size(self, new_size):
         """Resize all buffers to new_size, copying existing data (truncates if smaller)."""
@@ -1001,6 +1316,9 @@ class DynamicPlotWidget(QWidget):
                 graph_title=getattr(self, "graph_title", "") or "",
                 graph_default_title=getattr(self, "graph_default_title", "") or "",
                 display_deadband=getattr(self, "display_deadband", 0) or 0,
+                limit_high=getattr(self, "limit_high_settings", None),
+                limit_low=getattr(self, "limit_low_settings", None),
+                variable_list=getattr(self, "_all_variable_list", []),
             )
             dialog.setModal(True)
             # Position dialog near the gear button of this graph
@@ -1062,6 +1380,15 @@ class DynamicPlotWidget(QWidget):
                     self.graph_title = (settings["graph_title"] or "").strip()
                 if "display_deadband" in settings:
                     self.display_deadband = float(settings["display_deadband"]) if settings["display_deadband"] else 0.0
+                
+                # Update limit lines settings
+                if "limit_high" in settings:
+                    self.limit_high_settings = settings["limit_high"]
+                if "limit_low" in settings:
+                    self.limit_low_settings = settings["limit_low"]
+                # Recreate limit lines with new settings
+                self._setup_limit_lines()
+                
                 # Update container title label if parent is the graph container
                 container = self.parent()
                 if container is not None and hasattr(container, "lbl_title"):
@@ -1072,28 +1399,201 @@ class DynamicPlotWidget(QWidget):
             traceback.print_exc()
 
     def export_graph_data_to_csv(self):
-        """Export current graph buffer data to CSV with semicolon separator. Format: index;var1;var2;..."""
+        """Export current graph buffer data to CSV with semicolon separator.
+        
+        Includes:
+        - Index column
+        - Timestamp column (for time-based: actual timestamps or fixed interval)
+        - X-axis variable column (for XY plots or variable-based X)
+        - Y variable columns
+        - Limit High/Low columns (if enabled)
+        """
+        # Build rows: common length across all variable buffers
+        buffers = [list(self.buffers_y.get(v, [])) for v in self.variables]
+        if not buffers:
+            QMessageBox.warning(self, "No data", "No data to export.")
+            return
+        n = max(len(b) for b in buffers)
+        if n == 0:
+            QMessageBox.warning(self, "No data", "No data to export.")
+            return
+        
+        # For time-based plots, ask user about timestamp format
+        use_actual_timestamps = True
+        fixed_interval_ms = None
+        
+        if not self.is_xy_plot:
+            # Show dialog to choose timestamp option
+            dialog = QDialog(self)
+            dialog.setWindowTitle("CSV Export - Timestamp Options")
+            dialog.setModal(True)
+            dialog.resize(350, 180)
+            dialog.setStyleSheet("background-color: #2b2b2b; color: white;")
+            
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(QLabel("Choose timestamp format for X-axis:"))
+            
+            radio_actual = QRadioButton("Actual timestamps (when signal was received)")
+            radio_actual.setChecked(True)
+            radio_fixed = QRadioButton("Fixed interval:")
+            
+            interval_layout = QHBoxLayout()
+            interval_spin = QSpinBox()
+            interval_spin.setRange(1, 10000)
+            interval_spin.setValue(int(self.comm_speed * 1000))  # Default to comm speed in ms
+            interval_spin.setSuffix(" ms")
+            interval_spin.setEnabled(False)
+            interval_layout.addWidget(interval_spin)
+            interval_layout.addStretch()
+            
+            radio_fixed.toggled.connect(lambda checked: interval_spin.setEnabled(checked))
+            
+            layout.addWidget(radio_actual)
+            layout.addWidget(radio_fixed)
+            layout.addLayout(interval_layout)
+            layout.addSpacing(10)
+            
+            btn_layout = QHBoxLayout()
+            btn_ok = QPushButton("Export")
+            btn_cancel = QPushButton("Cancel")
+            btn_ok.clicked.connect(dialog.accept)
+            btn_cancel.clicked.connect(dialog.reject)
+            btn_layout.addStretch()
+            btn_layout.addWidget(btn_ok)
+            btn_layout.addWidget(btn_cancel)
+            layout.addLayout(btn_layout)
+            
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            
+            use_actual_timestamps = radio_actual.isChecked()
+            if radio_fixed.isChecked():
+                fixed_interval_ms = interval_spin.value()
+        
+        # Get save path
         path, _ = QFileDialog.getSaveFileName(self, "Export graph data", "", "CSV (*.csv)")
         if not path:
             return
+        
         try:
-            # Build rows: common length across all variable buffers
-            buffers = [list(self.buffers_y.get(v, [])) for v in self.variables]
-            if not buffers:
-                return
-            n = max(len(b) for b in buffers)
-            if n == 0:
-                return
             with open(path, "w", newline="", encoding="utf-8") as f:
-                header = "index;" + ";".join(self.variables)
-                f.write(header + "\n")
+                # Build header
+                header_cols = ["Index"]
+                
+                # Add timestamp column for time-based graphs
+                if not self.is_xy_plot:
+                    header_cols.append("Timestamp")
+                
+                # Add X-axis variable for XY plots or discrete index with linked variable
+                if self.is_xy_plot:
+                    header_cols.append(self.x_axis_source)
+                elif self.is_discrete_index and self.discrete_index_linked_variable:
+                    header_cols.append(self.discrete_index_linked_variable)
+                
+                # Add Y variables
+                header_cols.extend(self.variables)
+                
+                # Add Limit High column if enabled
+                if self.limit_high_settings.get("enabled", False):
+                    if self.limit_high_settings.get("type") == "variable":
+                        header_cols.append(f"LimitHigh ({self.limit_high_settings.get('variable', 'N/A')})")
+                    else:
+                        header_cols.append("LimitHigh")
+                
+                # Add Limit Low column if enabled
+                if self.limit_low_settings.get("enabled", False):
+                    if self.limit_low_settings.get("type") == "variable":
+                        header_cols.append(f"LimitLow ({self.limit_low_settings.get('variable', 'N/A')})")
+                    else:
+                        header_cols.append("LimitLow")
+                
+                f.write(";".join(header_cols) + "\n")
+                
+                # Prepare X-axis data
+                x_data = None
+                if self.is_xy_plot:
+                    x_data = list(self.buffers_x.get(self.x_axis_source, []))
+                elif self.is_discrete_index:
+                    x_data = list(self.buffers_x_discrete)
+                
+                # Prepare timestamp data
+                timestamps = list(self.buffer_timestamps) if hasattr(self, 'buffer_timestamps') else []
+                
+                # Prepare limit data (get from latest_values_cache for variable-based limits)
+                limit_high_values = []
+                limit_low_values = []
+                
+                if self.limit_high_settings.get("enabled", False):
+                    if self.limit_high_settings.get("type") == "fixed":
+                        limit_high_values = [self.limit_high_settings.get("value", "")] * n
+                    else:
+                        # Variable-based: try to get from buffers_y if it's a tracked variable
+                        var = self.limit_high_settings.get("variable", "")
+                        if var in self.buffers_y:
+                            limit_high_values = list(self.buffers_y.get(var, []))
+                        else:
+                            # Use current value for all rows (variable not in this graph's buffers)
+                            current_val = self.latest_values_cache.get(var, "")
+                            limit_high_values = [current_val] * n
+                
+                if self.limit_low_settings.get("enabled", False):
+                    if self.limit_low_settings.get("type") == "fixed":
+                        limit_low_values = [self.limit_low_settings.get("value", "")] * n
+                    else:
+                        var = self.limit_low_settings.get("variable", "")
+                        if var in self.buffers_y:
+                            limit_low_values = list(self.buffers_y.get(var, []))
+                        else:
+                            current_val = self.latest_values_cache.get(var, "")
+                            limit_low_values = [current_val] * n
+                
+                # Write data rows
                 for i in range(n):
-                    row = [str(i)]
+                    row = [str(i + 1)]  # Index starts at 1
+                    
+                    # Add timestamp for time-based graphs
+                    if not self.is_xy_plot:
+                        if use_actual_timestamps and i < len(timestamps):
+                            # Format: mm:ss.milliseconds (e.g., 13:01.100)
+                            ts = timestamps[i]
+                            ts_str = ts.strftime("%M:%S.") + f"{ts.microsecond // 1000:03d}"
+                            row.append(ts_str)
+                        elif fixed_interval_ms is not None:
+                            # Calculate timestamp based on fixed interval from start
+                            total_ms = i * fixed_interval_ms
+                            minutes = (total_ms // 60000) % 60
+                            seconds = (total_ms // 1000) % 60
+                            ms = total_ms % 1000
+                            row.append(f"{minutes:02d}:{seconds:02d}.{ms:03d}")
+                        else:
+                            row.append("")
+                    
+                    # Add X-axis value for XY plots or discrete index
+                    if self.is_xy_plot or (self.is_discrete_index and self.discrete_index_linked_variable):
+                        if x_data and i < len(x_data):
+                            row.append(str(x_data[i]) if x_data[i] is not None else "")
+                        else:
+                            row.append("")
+                    
+                    # Add Y variable values
                     for v in self.variables:
                         buf = self.buffers_y.get(v, [])
                         val = buf[i] if i < len(buf) else ""
-                        row.append(str(val) if val != "" and val is not None else "")
+                        row.append(str(val) if val is not None and val != "" else "")
+                    
+                    # Add Limit High value
+                    if self.limit_high_settings.get("enabled", False):
+                        val = limit_high_values[i] if i < len(limit_high_values) else ""
+                        row.append(str(val) if val is not None and val != "" else "")
+                    
+                    # Add Limit Low value
+                    if self.limit_low_settings.get("enabled", False):
+                        val = limit_low_values[i] if i < len(limit_low_values) else ""
+                        row.append(str(val) if val is not None and val != "" else "")
+                    
                     f.write(";".join(row) + "\n")
+            
+            QMessageBox.information(self, "Export successful", f"Data exported to:\n{path}")
         except Exception as e:
             logging.warning(f"Export CSV failed: {e}")
             QMessageBox.warning(self, "Export failed", str(e))
@@ -1261,7 +1761,10 @@ class DynamicPlotWidget(QWidget):
             min_v, max_v = 0.0, 0.0
         
         dl = self._display_label(var_name)
-        txt = f"{dl}: {y_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
+        fmt = self._format_value(var_name, y_value)
+        min_fmt = self._format_value(var_name, min_v)
+        max_fmt = self._format_value(var_name, max_v)
+        txt = f"{dl}: {fmt} <span style='font-size:10px; color:#aaa;'>(Min:{min_fmt} Max:{max_fmt})</span>"
         self.value_labels[var_name].setText(txt)
         self._update_time_plot_x_range()
         if len(self.variables) == 2:
@@ -1321,7 +1824,10 @@ class DynamicPlotWidget(QWidget):
                 min_v = min(data) if data else 0.0
                 max_v = max(data) if data else 0.0
                 dl = self._display_label(var_name)
-                txt = f"{dl}: {last_val:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
+                fmt = self._format_value(var_name, last_val)
+                min_fmt = self._format_value(var_name, min_v)
+                max_fmt = self._format_value(var_name, max_v)
+                txt = f"{dl}: {fmt} <span style='font-size:10px; color:#aaa;'>(Min:{min_fmt} Max:{max_fmt})</span>"
                 self.value_labels[var_name].setText(txt)
         if len(self.variables) == 2:
             self._update_delta_line()
@@ -1329,7 +1835,9 @@ class DynamicPlotWidget(QWidget):
     def update_data_array(self, var_name, array_values):
         """Add all array values at once to the graph.
         Arrays contain oversampled data that should be plotted together.
-        Timestamps are distributed over the communication cycle time."""
+        Timestamps are distributed over the communication cycle time.
+        For discrete index mode without linked variable, the array REPLACES
+        the buffer (history array use case) instead of appending."""
         if var_name not in self.variables:
             return
         # When discrete index is linked to a variable, X is driven by that variable's updates only; skip array Y updates
@@ -1342,31 +1850,45 @@ class DynamicPlotWidget(QWidget):
         current_time = datetime.now()
         array_length = len(array_values)
         
-        # Calculate time step: distribute array values over the communication cycle
-        # Assume array values were sampled over the communication cycle time
-        time_step = self.comm_speed / array_length if array_length > 0 else 0
-        
-        # Add all array values to buffer with distributed timestamps
-        base_buffer_length = len(self.buffers_y.get(var_name, []))
-        
-        for i, val in enumerate(array_values):
-            try:
-                y_val = float(val)
-                if np.isnan(y_val) or np.isinf(y_val):
+        # For discrete index without linked variable: REPLACE buffer with array (history array use case)
+        # This prevents accumulation when the PLC sends the complete history array each cycle
+        if self.is_discrete_index:
+            clean_values = []
+            for val in array_values:
+                try:
+                    y_val = float(val)
+                    if np.isnan(y_val) or np.isinf(y_val):
+                        continue
+                    y_val = self._apply_deadband(y_val)
+                    clean_values.append(y_val)
+                except (ValueError, TypeError):
                     continue
-                y_val = self._apply_deadband(y_val)
-                # Add to buffer
-                self.buffers_y[var_name].append(y_val)
-                
-                # Calculate timestamp for this value (distributed over comm cycle)
-                # First value gets current time, subsequent values are spaced by time_step
-                value_timestamp = current_time - timedelta(seconds=(array_length - i - 1) * time_step)
-                
-                # Add timestamp
-                self.buffer_timestamps.append(value_timestamp)
-                
-            except (ValueError, TypeError):
-                continue
+            if clean_values:
+                self.buffers_y[var_name] = deque(clean_values, maxlen=self.buffer_size)
+        else:
+            # Calculate time step: distribute array values over the communication cycle
+            # Assume array values were sampled over the communication cycle time
+            time_step = self.comm_speed / array_length if array_length > 0 else 0
+            
+            # Add all array values to buffer with distributed timestamps
+            for i, val in enumerate(array_values):
+                try:
+                    y_val = float(val)
+                    if np.isnan(y_val) or np.isinf(y_val):
+                        continue
+                    y_val = self._apply_deadband(y_val)
+                    # Add to buffer
+                    self.buffers_y[var_name].append(y_val)
+                    
+                    # Calculate timestamp for this value (distributed over comm cycle)
+                    # First value gets current time, subsequent values are spaced by time_step
+                    value_timestamp = current_time - timedelta(seconds=(array_length - i - 1) * time_step)
+                    
+                    # Add timestamp
+                    self.buffer_timestamps.append(value_timestamp)
+                    
+                except (ValueError, TypeError):
+                    continue
         
         # Update the plot with all new data
         if self.is_xy_plot:
@@ -1428,12 +1950,42 @@ class DynamicPlotWidget(QWidget):
             min_v, max_v = 0.0, 0.0
         
         dl = self._display_label(var_name)
-        txt = f"{dl}: {latest_value:.2f} <span style='font-size:10px; color:#aaa;'>(Min:{min_v:.1f} Max:{max_v:.1f})</span>"
+        fmt = self._format_value(var_name, latest_value)
+        min_fmt = self._format_value(var_name, min_v)
+        max_fmt = self._format_value(var_name, max_v)
+        txt = f"{dl}: {fmt} <span style='font-size:10px; color:#aaa;'>(Min:{min_fmt} Max:{max_fmt})</span>"
         self.value_labels[var_name].setText(txt)
         self._update_time_plot_x_range()
         if len(self.variables) == 2:
             self._update_delta_line()
             self._apply_aligned_dual_y_range()
+
+    def _get_filtered_y_data(self, var):
+        """Return filtered y data list (matching what's actually displayed on plot) for a variable."""
+        # First try to get data directly from the plot line (most accurate for tooltip)
+        line = self.lines.get(var)
+        if line is not None:
+            try:
+                x_plot, y_plot = line.getData()
+                if y_plot is not None and len(y_plot) > 0:
+                    return list(y_plot)
+            except Exception:
+                pass
+        # Fallback to buffer
+        raw = self.buffers_y.get(var, [])
+        return [float(y) for y in raw if y is not None and isinstance(y, (int, float)) and not np.isnan(y)]
+    
+    def _get_filtered_x_data(self, var):
+        """Return filtered x data list (matching what's actually displayed on plot) for a variable."""
+        line = self.lines.get(var)
+        if line is not None:
+            try:
+                x_plot, y_plot = line.getData()
+                if x_plot is not None and len(x_plot) > 0:
+                    return list(x_plot)
+            except Exception:
+                pass
+        return []
 
     def mouse_moved(self, evt):
         pos = evt[0]
@@ -1447,23 +1999,35 @@ class DynamicPlotWidget(QWidget):
         ref_var = self.variables[0] if self.variables else None
         if not ref_var:
             return
+
+        # Capture all filtered data ONCE as a synchronized snapshot from the actual plot lines
+        # This ensures the tooltip shows exactly what is displayed on the plot
+        filtered_y_data = {var: self._get_filtered_y_data(var) for var in self.variables}
+        ref_y_filtered = filtered_y_data.get(ref_var, [])
+        n_pts_filtered = len(ref_y_filtered)
+
         if self.is_xy_plot:
-            x_data = np.array(self.buffers_x.get(ref_var, []))
+            x_raw = self.buffers_x.get(ref_var, [])
+            x_data = np.array([float(x) for x in x_raw if x is not None and isinstance(x, (int, float)) and not np.isnan(x)])
         elif self.is_discrete_index and getattr(self, "discrete_index_linked_variable", None):
             n_x = len(self.buffers_x_discrete)
-            n_y = len(self.buffers_y.get(ref_var, []))
-            min_len = min(n_x, n_y)
+            min_len = min(n_x, n_pts_filtered)
             if min_len == 0:
                 self.tooltip.hide()
                 self.crosshair_v.hide()
                 return
             x_data = np.array(list(self.buffers_x_discrete)[:min_len], dtype=float)
+            # Truncate y data to match x data length
+            filtered_y_data = {var: filtered_y_data[var][:min_len] for var in self.variables}
         elif self.is_discrete_index:
-            n_pts = len(self.buffers_y.get(ref_var, []))
-            x_data = np.arange(1, n_pts + 1, dtype=float) if n_pts > 0 else np.array([])
+            # For discrete index without linked variable, use x data from plot line to stay synchronized
+            ref_x_from_plot = self._get_filtered_x_data(ref_var)
+            if ref_x_from_plot:
+                x_data = np.array(ref_x_from_plot, dtype=float)
+            else:
+                x_data = np.arange(1, n_pts_filtered + 1, dtype=float) if n_pts_filtered > 0 else np.array([])
         else:
-            n_pts = len(self.buffers_y.get(ref_var, []))
-            x_data = np.arange(n_pts, dtype=float) if n_pts > 0 else np.array([])
+            x_data = np.arange(n_pts_filtered, dtype=float) if n_pts_filtered > 0 else np.array([])
         if len(x_data) == 0:
             self.tooltip.hide()
             self.crosshair_v.hide()
@@ -1476,9 +2040,10 @@ class DynamicPlotWidget(QWidget):
 
         html = f"<div style='background-color: #333; color: white; padding: 8px; border-radius: 4px;'>"
         if self.is_xy_plot:
-            html += f"<b>{self.x_axis_source}: {x_val:.2f}</b><br/>"
+            x_fmt = self._format_value(self.x_axis_source, x_val)
+            html += f"<b>{self.x_axis_source}: {x_fmt}</b><br/>"
         elif self.is_discrete_index:
-            html += f"<b>Row: {int(x_val)}</b><br/>"
+            html += f"<b>Index: {int(x_val)}</b><br/>"
         else:
             # Get the actual timestamp from buffer_timestamps corresponding to this index
             idx_int = int(round(idx))
@@ -1494,23 +2059,31 @@ class DynamicPlotWidget(QWidget):
                 time_str = self.format_time_from_index(idx)
             html += f"<b>Time: {time_str}</b><br/>"
         html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+
+        # Look up y values using the synchronized snapshot
         for var in self.variables:
-            y_data = self.buffers_y.get(var)
+            y_data = filtered_y_data[var]
             if y_data and idx < len(y_data):
                 y_val = y_data[idx]
                 color = self.lines[var].opts['pen'].color().name()
-                html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_val:.2f}</span><br/>"
+                y_fmt = self._format_value(var, y_val)
+                html += f"<span style='color: {color}; font-weight: bold;'>{var}: {y_fmt}</span><br/>"
 
         if len(self.variables) == 2:
-            y1_data = self.buffers_y.get(self.variables[0])
-            y2_data = self.buffers_y.get(self.variables[1])
+            y1_data = filtered_y_data.get(self.variables[0], [])
+            y2_data = filtered_y_data.get(self.variables[1], [])
             if y1_data and y2_data and idx < len(y1_data) and idx < len(y2_data):
                 try:
                     v1, v2 = float(y1_data[idx]), float(y2_data[idx])
                     if not (np.isnan(v1) or np.isnan(v2)):
                         delta = v2 - v1
+                        # Use max decimals of the two variables for delta
+                        d1 = self.variable_metadata.get(self.variables[0], {}).get("decimals", 2)
+                        d2 = self.variable_metadata.get(self.variables[1], {}).get("decimals", 2)
+                        dec = max(d1, d2)
+                        delta_fmt = f"{delta:.{dec}f}"
                         html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
-                        html += f"<span style='color: #FF9800; font-weight: bold;'>Delta ({self.variables[1]} − {self.variables[0]}): {delta:.2f}</span><br/>"
+                        html += f"<span style='color: #FF9800; font-weight: bold;'>Delta ({self.variables[1]} − {self.variables[0]}): {delta_fmt}</span><br/>"
                 except (ValueError, TypeError):
                     pass
 
@@ -1519,8 +2092,46 @@ class DynamicPlotWidget(QWidget):
             html += "<b style='color: #FFEA00;'>Recipe Parameters:</b><br/>"
             for param in self.recipe_params:
                 value = self.latest_values_cache.get(param, "N/A")
-                val_str = f"{value:.2f}" if isinstance(value, (float, int)) else str(value)
+                val_str = self._format_value(param, value)
                 html += f"<span style='color: #ccc;'>{param.replace('_', ' ')}:</span> <b>{val_str}</b><br/>"
+        
+        # Show Limit Lines if enabled
+        has_limit_high = self.limit_high_settings.get("enabled", False)
+        has_limit_low = self.limit_low_settings.get("enabled", False)
+        if has_limit_high or has_limit_low:
+            html += "<hr style='border-top: 1px solid #555; margin: 4px 0;'/>"
+            html += "<b style='color: #ccc;'>Limits:</b><br/>"
+            
+            if has_limit_high:
+                color_high = self.limit_high_settings.get("color", "#FF5252")
+                if self.limit_high_settings.get("type") == "fixed":
+                    val_high = self.limit_high_settings.get("value", 0)
+                    html += f"<span style='color: {color_high};'>▬ ▬ Limit High: <b>{val_high}</b></span><br/>"
+                elif self.limit_high_settings.get("type") == "variable":
+                    var_name = self.limit_high_settings.get("variable", "")
+                    val_high = self.latest_values_cache.get(var_name, "N/A")
+                    try:
+                        val_high = float(val_high)
+                        val_str = f"{val_high:.4g}"
+                    except (ValueError, TypeError):
+                        val_str = str(val_high)
+                    html += f"<span style='color: {color_high};'>▬ ▬ Limit High ({var_name}): <b>{val_str}</b></span><br/>"
+            
+            if has_limit_low:
+                color_low = self.limit_low_settings.get("color", "#9C27B0")
+                if self.limit_low_settings.get("type") == "fixed":
+                    val_low = self.limit_low_settings.get("value", 0)
+                    html += f"<span style='color: {color_low};'>▬ ▬ Limit Low: <b>{val_low}</b></span><br/>"
+                elif self.limit_low_settings.get("type") == "variable":
+                    var_name = self.limit_low_settings.get("variable", "")
+                    val_low = self.latest_values_cache.get(var_name, "N/A")
+                    try:
+                        val_low = float(val_low)
+                        val_str = f"{val_low:.4g}"
+                    except (ValueError, TypeError):
+                        val_str = str(val_low)
+                    html += f"<span style='color: {color_low};'>▬ ▬ Limit Low ({var_name}): <b>{val_str}</b></span><br/>"
+        
         html += "</div>"
 
         self.tooltip.setHtml(html)
@@ -1987,6 +2598,21 @@ class MainWindow(QMainWindow):
         """)
         self.btn_add_graph.clicked.connect(self.add_new_graph)
         self.sidebar_layout.addWidget(self.btn_add_graph)
+
+        # Analytics button - opens a separate window with statistics for all graphs
+        self.btn_analytics = QPushButton("📊 Open Analytics")
+        self.btn_analytics.setCursor(Qt.PointingHandCursor)
+        self.btn_analytics.setStyleSheet("""
+            QPushButton { background-color: #4a4a4a; color: #e0e0e0; font-weight: bold; padding: 10px; border: 1px solid #3e3e42; border-radius: 3px; }
+            QPushButton:hover { background-color: #5a5a5a; }
+            QPushButton:pressed { background-color: #3a3a3a; }
+        """)
+        self.btn_analytics.setToolTip("Open Analytics window showing real-time statistics and distribution histograms for all plotted graphs")
+        self.btn_analytics.clicked.connect(self.open_analytics_window)
+        self.sidebar_layout.addWidget(self.btn_analytics)
+        
+        # Analytics window instance (created on demand)
+        self.analytics_window = None
 
         # Initialize communication status before creating panel
         self.setup_comm_info_panel()
@@ -3144,6 +3770,9 @@ class MainWindow(QMainWindow):
                 y_axis_assignments=settings.get("y_axis_assignments"),
                 display_deadband=settings.get("display_deadband", 0),
                 discrete_index_linked_variable=settings.get("discrete_index_linked_variable"),
+                limit_high=settings.get("limit_high"),
+                limit_low=settings.get("limit_low"),
+                all_variable_list=self.all_variables,
             )
             vbox.addWidget(new_graph)
             container.lbl_title = lbl_title
@@ -3160,7 +3789,7 @@ class MainWindow(QMainWindow):
             return
 
         # Online: use buffer_size and other options from GraphConfigDialog
-        buffer_size = settings.get("buffer_size", 5000)
+        buffer_size = settings.get("buffer_size", 100000)
         has_arrays = any(var_name.startswith('arr') for var_name in var_names)
         if has_arrays:
             array_size = 600
@@ -3190,6 +3819,9 @@ class MainWindow(QMainWindow):
             y_axis_assignments=settings.get("y_axis_assignments"),
             display_deadband=settings.get("display_deadband", 0),
             discrete_index_linked_variable=settings.get("discrete_index_linked_variable"),
+            limit_high=settings.get("limit_high"),
+            limit_low=settings.get("limit_low"),
+            all_variable_list=self.all_variables,
         )
         vbox.addWidget(new_graph)
         container.lbl_title = lbl_title
@@ -3262,6 +3894,30 @@ class MainWindow(QMainWindow):
                             except (ValueError, TypeError):
                                 x_val = 0.0
                     graph.update_data(variable_name, value, x_value=x_val)
+                
+                # Update limit lines if this variable is used as a limit source
+                graph._update_limit_lines_from_variables({variable_name: value})
+
+    def open_analytics_window(self):
+        """Open the Analytics window showing real-time statistics for all graphs."""
+        if not self.graphs:
+            QMessageBox.information(
+                self,
+                "No Graphs",
+                "Please create at least one graph first, then open Analytics to view statistics."
+            )
+            return
+        
+        # Create or show existing analytics window
+        if self.analytics_window is None or not self.analytics_window.isVisible():
+            self.analytics_window = AnalyticsWindow(parent=None)
+            self.analytics_window.set_graphs(self.graphs, self.variable_metadata)
+            self.analytics_window.show()
+        else:
+            # Window exists and is visible - bring to front and refresh
+            self.analytics_window.set_graphs(self.graphs, self.variable_metadata)
+            self.analytics_window.raise_()
+            self.analytics_window.activateWindow()
 
     def toggle_pause(self):
         """Toggle pause: freeze current values so user can zoom, pan, or export without new data updating the graphs."""
@@ -3361,6 +4017,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save_last_config()
+        # Close analytics window if open
+        if self.analytics_window is not None:
+            self.analytics_window.close()
+            self.analytics_window = None
         # Get recording DB path before stopping thread (Snap7 only)
         db_path = None
         if self.plc_thread:

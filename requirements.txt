@@ -1,6 +1,7 @@
 PySide6
 pyqtgraph
 duckdb
+scipy
 flask==3.0.3
 flask-cors==4.0.0
 waitress==3.0.0

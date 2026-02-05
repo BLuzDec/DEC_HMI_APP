@@ -36,6 +36,17 @@ def _parse_number(val: str, default: float) -> float:
         return default
 
 
+def _parse_decimals(val: str, default: int = 2) -> int:
+    """Parse Decimals column to int; return default on error or empty. Clamp to 0..10."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return default
+    try:
+        n = int(float(val))
+        return max(0, min(10, n))
+    except (ValueError, TypeError):
+        return default
+
+
 def _group_key(var_type: str, min_val: float, max_val: float) -> str:
     """Return a stable key for grouping variables with same type and range."""
     return f"{var_type}|{min_val}|{max_val}"
@@ -77,6 +88,7 @@ def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
                 max_val = _parse_number(row.get("Max", "10"), 10.0)
                 unit = (row.get("Unit") or "").strip()
                 name = (row.get("Name") or "").strip()
+                decimals = _parse_decimals(row.get("Decimals", ""), 2)
 
                 gkey = _group_key(var_type, min_val, max_val)
                 if gkey not in group_keys_seen:
@@ -95,6 +107,7 @@ def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
                     "group_id": group_id,
                     "display_label": display_label,
                     "type": var_type,
+                    "decimals": decimals,
                 }
     except Exception as e:
         logging.error("Error loading exchange variables CSV %s: %s", path, e)
@@ -134,6 +147,7 @@ def load_recipe_csv(
                 max_val = _parse_number(row.get("Max", "10"), 10.0)
                 unit = (row.get("Unit") or "").strip()
                 name = (row.get("Name") or "").strip()
+                decimals = _parse_decimals(row.get("Decimals", ""), 2)
 
                 gkey = _group_key(var_type, min_val, max_val)
                 if gkey not in group_keys_seen:
@@ -151,6 +165,7 @@ def load_recipe_csv(
                     "group_id": group_id,
                     "display_label": display_label,
                     "type": var_type,
+                    "decimals": decimals,
                 }
     except Exception as e:
         logging.error("Error loading recipe variables CSV %s: %s", path, e)
