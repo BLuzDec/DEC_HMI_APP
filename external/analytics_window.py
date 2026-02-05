@@ -11,10 +11,10 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QFrame, QPushButton, QScrollArea,
     QLineEdit, QGridLayout, QProxyStyle, QStyle, QApplication,
-    QTabWidget
+    QTabWidget, QCheckBox, QColorDialog
 )
 from PySide6.QtCore import Qt, QTimer, QEvent
-from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor
+from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont
 
 from external.calculations import DataAnalyzer
 
@@ -53,6 +53,12 @@ class AnalyticsWindow(QWidget):
         self.variable_metadata = {}
         self.setpoints = {}
         self.tolerances = {}
+        
+        # Line display settings
+        self.show_setpoint_line = {}  # var_name -> bool
+        self.show_tolerance_lines = {}  # var_name -> bool
+        self.setpoint_colors = {}  # var_name -> color string
+        self.tolerance_colors = {}  # var_name -> color string
         
         # History tracking for time-series plots
         self.metric_history = {}  # var_name -> {'rsd': deque, 'cp': deque, 'cpk': deque, 'cpm': deque, 'time': deque}
@@ -147,10 +153,13 @@ class AnalyticsWindow(QWidget):
             self.background_image = None
     
     def paintEvent(self, event):
+        super().paintEvent(event)
         if self.background_image:
             painter = QPainter(self)
-            painter.drawPixmap(self.width() - 70, 10, self.background_image)
-        super().paintEvent(event)
+            # Center the image horizontally, position near top
+            x = (self.width() - self.background_image.width()) // 2
+            painter.setOpacity(0.15)  # Make it a subtle background watermark
+            painter.drawPixmap(x, 15, self.background_image)
     
     def _toggle_auto_refresh(self, checked):
         self.auto_refresh_btn.setText("Auto-Refresh: ON" if checked else "Auto-Refresh: OFF")
@@ -339,7 +348,7 @@ class AnalyticsWindow(QWidget):
         
         panel_refs = {
             'raw_data': y_array, 'stats': stats, 'capability': capability,
-            'display_name': display_name, 'unit': unit
+            'display_name': display_name, 'unit': unit, 'graph': graph
         }
         
         container = QFrame()
@@ -380,6 +389,53 @@ class AnalyticsWindow(QWidget):
         panel_refs['tolerance_edit'] = tol_edit
         
         main_layout.addLayout(header_layout)
+        
+        # Initialize colors if not set
+        if var_name not in self.setpoint_colors:
+            self.setpoint_colors[var_name] = '#00ff00'  # Green default
+        if var_name not in self.tolerance_colors:
+            self.tolerance_colors[var_name] = '#ffaa00'  # Orange default
+        if var_name not in self.show_setpoint_line:
+            self.show_setpoint_line[var_name] = False
+        if var_name not in self.show_tolerance_lines:
+            self.show_tolerance_lines[var_name] = False
+        
+        # Checkboxes and color buttons for graph lines (on the right, same row as Setpoint/Tolerance)
+        header_layout.addSpacing(20)
+        
+        # Setpoint line checkbox and color
+        sp_check = QCheckBox("Show Setpoint")
+        sp_check.setStyleSheet("color: #aaa; font-size: 10px;")
+        sp_check.setChecked(self.show_setpoint_line.get(var_name, False))
+        sp_check.stateChanged.connect(lambda state, v=var_name: self._on_line_toggle(v, 'setpoint', state))
+        header_layout.addWidget(sp_check)
+        panel_refs['sp_check'] = sp_check
+        
+        sp_color_btn = QPushButton()
+        sp_color_btn.setFixedSize(22, 22)
+        sp_color_btn.setStyleSheet(f"background-color: {self.setpoint_colors[var_name]}; border: 1px solid #555; border-radius: 3px;")
+        sp_color_btn.setToolTip("Choose setpoint line color")
+        sp_color_btn.clicked.connect(lambda _, v=var_name, btn=sp_color_btn: self._choose_line_color(v, 'setpoint', btn))
+        header_layout.addWidget(sp_color_btn)
+        panel_refs['sp_color_btn'] = sp_color_btn
+        
+        header_layout.addSpacing(15)
+        
+        # Tolerance lines checkbox and color
+        tol_check = QCheckBox("Show Tolerance")
+        tol_check.setStyleSheet("color: #aaa; font-size: 10px;")
+        tol_check.setChecked(self.show_tolerance_lines.get(var_name, False))
+        tol_check.stateChanged.connect(lambda state, v=var_name: self._on_line_toggle(v, 'tolerance', state))
+        header_layout.addWidget(tol_check)
+        panel_refs['tol_check'] = tol_check
+        
+        tol_color_btn = QPushButton()
+        tol_color_btn.setFixedSize(22, 22)
+        tol_color_btn.setStyleSheet(f"background-color: {self.tolerance_colors[var_name]}; border: 1px solid #555; border-radius: 3px;")
+        tol_color_btn.setToolTip("Choose tolerance lines color")
+        tol_color_btn.clicked.connect(lambda _, v=var_name, btn=tol_color_btn: self._choose_line_color(v, 'tolerance', btn))
+        header_layout.addWidget(tol_color_btn)
+        panel_refs['tol_color_btn'] = tol_color_btn
         
         # Tab widget
         tabs = QTabWidget()
@@ -437,29 +493,51 @@ class AnalyticsWindow(QWidget):
         right_layout.setSpacing(8)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # RSD indicator (compact)
+        # RSD indicator (compact single line)
         rsd_val = stats['rsd']
         rsd_color, rsd_rating = self._get_rsd_color_rating(rsd_val)
         
+        # Build RSD tooltip with rating guide
+        rsd_tooltip = (
+            f"━━━ %RSD (CV) ━━━\n\n"
+            f"Relative Standard Deviation\n"
+            f"Also called Coefficient of Variation\n\n"
+            f"Formula: %RSD = (σ / µ) × 100\n\n"
+            f"Current: {rsd_val:.2f}%\n"
+            f"Rating: {rsd_rating}\n\n"
+            f"Rating Guide:\n"
+            f"  • < 0.5%: Excellent\n"
+            f"  • < 1%: Very Good\n"
+            f"  • < 2.5%: Medium\n"
+            f"  • < 5%: Poor\n"
+            f"  • ≥ 5%: High Variability"
+        )
+        
         rsd_frame = QFrame()
-        rsd_frame.setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 4px; }}")
-        rsd_frame.setMaximumHeight(55)
+        rsd_frame.setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 3px; }}")
+        rsd_frame.setMaximumHeight(26)
+        rsd_frame.setToolTip(rsd_tooltip)
+        rsd_frame.setCursor(Qt.CursorShape.WhatsThisCursor)
         rsd_layout = QHBoxLayout(rsd_frame)
-        rsd_layout.setContentsMargins(8, 4, 8, 4)
-        rsd_layout.setSpacing(6)
+        rsd_layout.setContentsMargins(6, 2, 6, 2)
+        rsd_layout.setSpacing(4)
         
         rsd_title = QLabel("%RSD:")
-        rsd_title.setStyleSheet("font-size: 10px; color: #888; border: none;")
+        rsd_title.setStyleSheet("font-size: 9px; color: #888; border: none;")
+        rsd_title.setToolTip(rsd_tooltip)
         rsd_layout.addWidget(rsd_title)
         
         rsd_display = QLabel(f"{rsd_val:.2f}%")
-        rsd_display.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {rsd_color}; border: none;")
+        rsd_display.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {rsd_color}; border: none;")
+        rsd_display.setToolTip(rsd_tooltip)
         rsd_layout.addWidget(rsd_display)
         panel_refs['rsd_display'] = rsd_display
         panel_refs['rsd_frame'] = rsd_frame
+        panel_refs['rsd_tooltip'] = rsd_tooltip
         
         rsd_rating_lbl = QLabel(f"({rsd_rating})")
         rsd_rating_lbl.setStyleSheet(f"font-size: 9px; color: {rsd_color}; border: none;")
+        rsd_rating_lbl.setToolTip(rsd_tooltip)
         rsd_layout.addWidget(rsd_rating_lbl)
         panel_refs['rsd_rating'] = rsd_rating_lbl
         
@@ -511,6 +589,61 @@ class AnalyticsWindow(QWidget):
         panel_refs[f'{metric_key}_plot'] = plot_widget
         panel_refs[f'{metric_key}_curve'] = curve
         
+        # Add crosshair for hover value display
+        vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#ff6b6b', width=1, style=Qt.PenStyle.DashLine))
+        hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#ff6b6b', width=1, style=Qt.PenStyle.DashLine))
+        vLine.setVisible(False)
+        hLine.setVisible(False)
+        plot_widget.addItem(vLine, ignoreBounds=True)
+        plot_widget.addItem(hLine, ignoreBounds=True)
+        
+        # Value label for hover
+        value_label = pg.TextItem(text="", color='#fff', anchor=(0, 1))
+        value_label.setFont(pg.QtGui.QFont('Arial', 10, pg.QtGui.QFont.Weight.Bold))
+        value_label.setVisible(False)
+        plot_widget.addItem(value_label, ignoreBounds=True)
+        
+        # Store references for crosshair
+        panel_refs[f'{metric_key}_vline'] = vLine
+        panel_refs[f'{metric_key}_hline'] = hLine
+        panel_refs[f'{metric_key}_value_label'] = value_label
+        
+        # Mouse move handler
+        def mouse_moved(evt):
+            pos = evt[0]
+            if plot_widget.sceneBoundingRect().contains(pos):
+                mouse_point = plot_widget.getPlotItem().vb.mapSceneToView(pos)
+                x, y = mouse_point.x(), mouse_point.y()
+                
+                # Find closest data point
+                history = self.metric_history.get(var_name, {})
+                if history and len(history['time']) > 0:
+                    times = list(history['time'])
+                    values = list(history[metric_key])
+                    
+                    # Find nearest x index
+                    if len(times) > 0:
+                        idx = min(range(len(times)), key=lambda i: abs(times[i] - x))
+                        snap_x = times[idx]
+                        snap_y = values[idx]
+                        
+                        vLine.setPos(snap_x)
+                        hLine.setPos(snap_y)
+                        vLine.setVisible(True)
+                        hLine.setVisible(True)
+                        
+                        value_label.setText(f"Sample: {int(snap_x)}\n{metric_name}: {snap_y:.4f}{unit_suffix}")
+                        value_label.setPos(snap_x, snap_y)
+                        value_label.setVisible(True)
+            else:
+                vLine.setVisible(False)
+                hLine.setVisible(False)
+                value_label.setVisible(False)
+        
+        # Connect mouse move signal
+        proxy = pg.SignalProxy(plot_widget.scene().sigMouseMoved, rateLimit=60, slot=mouse_moved)
+        panel_refs[f'{metric_key}_proxy'] = proxy  # Keep reference to prevent garbage collection
+        
         # Draw initial data
         history = self.metric_history.get(var_name, {})
         if history and len(history['time']) > 0:
@@ -527,8 +660,7 @@ class AnalyticsWindow(QWidget):
         current_val = history[metric_key][-1] if history and len(history[metric_key]) > 0 else 0
         
         if metric_key == 'rsd':
-            color = "#6bcf6b" if current_val < 5 else "#ffc107" if current_val < 10 else "#ff6b6b"
-            rating = "Excellent" if current_val < 5 else "Good" if current_val < 10 else "High Variability"
+            color, rating = self._get_rsd_color_rating(current_val)
         else:
             color = "#6bcf6b" if current_val >= 1.67 else "#8bc34a" if current_val >= 1.33 else "#ffc107" if current_val >= 1.0 else "#ff6b6b"
             rating = "Excellent" if current_val >= 1.67 else "Capable" if current_val >= 1.33 else "Marginal" if current_val >= 1.0 else "Not Capable"
@@ -576,7 +708,7 @@ class AnalyticsWindow(QWidget):
         
         # Threshold guide
         if metric_key == 'rsd':
-            guide = "< 5%: Excellent\n5-10%: Good\n> 10%: High Variability"
+            guide = "< 0.5%: Excellent\n< 1%: Very Good\n< 2.5%: Medium\n< 5%: Poor\n≥ 5%: High Variability"
         else:
             guide = "≥ 1.67: Excellent\n≥ 1.33: Capable\n≥ 1.00: Marginal\n< 1.00: Not Capable"
         guide_lbl = QLabel(guide)
@@ -623,58 +755,95 @@ class AnalyticsWindow(QWidget):
             panel_refs[f'stat_{key}_lbl'] = lbl
             panel_refs[f'stat_{key}_tip'] = tooltip
         
-        # Build detailed tooltips
+        # Build detailed tooltips with consistent symbol explanations
         count_tip = (
             f"━━━ COUNT (n) ━━━\n\n"
+            f"Symbol: n = sample size\n\n"
             f"Definition: Total number of valid data points\n"
             f"in the current sample set.\n\n"
-            f"Current Value: {stats['count']} samples\n\n"
+            f"Current Value: n = {stats['count']} samples\n\n"
             f"Note: NaN and Inf values are excluded."
         )
         
         mean_tip = (
-            f"━━━ MEAN (µ) ━━━\n\n"
-            f"Definition: Arithmetic average of all values.\n"
-            f"The central tendency of the distribution.\n\n"
-            f"Formula: µ = Σ(xᵢ) / n\n\n"
-            f"Current Calculation:\n"
-            f"  µ = {stats['mean']:.6f}{unit_str}\n\n"
+            f"━━━ MEAN (µ) - Average ━━━\n\n"
+            f"Symbol: µ (mu) = arithmetic mean\n\n"
+            f"Definition: The arithmetic average of all values.\n"
+            f"Represents the central tendency of your data.\n\n"
+            f"WHY IT'S USED:\n"
+            f"  • Shows where your process is centered\n"
+            f"  • Indicates if the process is on target\n"
+            f"  • Detects systematic bias or drift\n"
+            f"  • Essential for process control decisions\n\n"
+            f"WHAT IT SHOWS:\n"
+            f"  • Process centering relative to setpoint\n"
+            f"  • If mean ≠ setpoint → process is off-center\n"
+            f"  • Trend in mean → process drift over time\n\n"
+            f"Formula: µ = Σ(xᵢ) / n\n"
+            f"  where: Σ = sum, xᵢ = each value, n = count\n\n"
+            f"Current Value: µ = {stats['mean']:.6f}{unit_str}\n\n"
             f"Context:\n"
-            f"  • Setpoint: {setpoint:.4f}{unit_str}\n"
-            f"  • Deviation from setpoint: {abs(stats['mean'] - setpoint):.4f}{unit_str}"
+            f"  • Setpoint (Target): {setpoint:.4f}{unit_str}\n"
+            f"  • Deviation from target: {abs(stats['mean'] - setpoint):.4f}{unit_str}\n"
+            f"  • Process centered: {'Yes ✓' if abs(stats['mean'] - setpoint) < stats['std'] else 'No - Review needed'}"
         )
         
         std_tip = (
             f"━━━ STANDARD DEVIATION (σ) ━━━\n\n"
+            f"Symbol: σ (sigma) = standard deviation\n\n"
             f"Definition: Measures the spread/dispersion\n"
-            f"of values around the mean.\n\n"
-            f"Formula: σ = √(Σ(xᵢ - µ)² / n)\n\n"
-            f"Current Calculation:\n"
-            f"  σ = {stats['std']:.6f}{unit_str}\n\n"
-            f"Interpretation:\n"
-            f"  • 68% of data within ±1σ:\n"
-            f"    [{stats['mean']-stats['std']:.4f}, {stats['mean']+stats['std']:.4f}]\n"
-            f"  • 95% of data within ±2σ:\n"
-            f"    [{stats['mean']-2*stats['std']:.4f}, {stats['mean']+2*stats['std']:.4f}]\n"
-            f"  • 99.7% of data within ±3σ:\n"
-            f"    [{stats['mean']-3*stats['std']:.4f}, {stats['mean']+3*stats['std']:.4f}]"
+            f"of values around the mean (µ).\n\n"
+            f"WHY IT'S USED:\n"
+            f"  • Quantifies process consistency/repeatability\n"
+            f"  • Lower σ = more consistent process\n"
+            f"  • Higher σ = more variation (less predictable)\n"
+            f"  • Used to calculate process capability (Cp, Cpk)\n"
+            f"  • Critical for quality control limits\n\n"
+            f"WHAT IT SHOWS:\n"
+            f"  • Process stability and predictability\n"
+            f"  • If σ is large → inconsistent dosing/filling\n"
+            f"  • If σ increases over time → equipment issue\n"
+            f"  • Basis for setting control limits (±3σ)\n\n"
+            f"Formula: σ = √(Σ(xᵢ - µ)² / n)\n"
+            f"  where: µ = mean, xᵢ = each value, n = count\n\n"
+            f"Current Value: σ = {stats['std']:.6f}{unit_str}\n\n"
+            f"Data Distribution (normal distribution rule):\n"
+            f"  • 68% within µ ± 1σ: [{stats['mean']-stats['std']:.4f}, {stats['mean']+stats['std']:.4f}]\n"
+            f"  • 95% within µ ± 2σ: [{stats['mean']-2*stats['std']:.4f}, {stats['mean']+2*stats['std']:.4f}]\n"
+            f"  • 99.7% within µ ± 3σ: [{stats['mean']-3*stats['std']:.4f}, {stats['mean']+3*stats['std']:.4f}]"
         )
         
+        rsd_color, rsd_rating = self._get_rsd_color_rating(stats['rsd'])
         rsd_tip = (
-            f"━━━ %RSD (CV) ━━━\n\n"
-            f"Definition: Relative Standard Deviation,\n"
-            f"also called Coefficient of Variation (CV).\n"
-            f"Expresses variability as percentage of mean.\n\n"
-            f"Formula: %RSD = (σ / µ) × 100\n\n"
+            f"━━━ %RSD - Relative Standard Deviation ━━━\n\n"
+            f"Also called: CV (Coefficient of Variation)\n\n"
+            f"Definition: Expresses variability as a percentage\n"
+            f"of the mean, allowing comparison across different\n"
+            f"scales and units.\n\n"
+            f"WHY IT'S USED:\n"
+            f"  • Compare variability across different products\n"
+            f"  • Unit-independent measure of precision\n"
+            f"  • Industry standard for dosing/filling accuracy\n"
+            f"  • Shows relative consistency regardless of scale\n"
+            f"  • e.g., 1% RSD on 100g = 1g variation\n"
+            f"        1% RSD on 1000g = 10g variation\n\n"
+            f"WHAT IT SHOWS:\n"
+            f"  • Process repeatability as a percentage\n"
+            f"  • Lower %RSD = more precise/repeatable process\n"
+            f"  • Higher %RSD = investigate equipment/material\n"
+            f"  • Useful for batch-to-batch comparison\n\n"
+            f"Formula: %RSD = (σ / µ) × 100\n"
+            f"  where: σ = std deviation, µ = mean\n\n"
             f"Current Calculation:\n"
             f"  %RSD = ({stats['std']:.4f} / {stats['mean']:.4f}) × 100\n"
-            f"  %RSD = {stats['rsd']:.2f}%\n\n"
+            f"  %RSD = {stats['rsd']:.2f}%\n"
+            f"  Rating: {rsd_rating}\n\n"
             f"Rating Guide:\n"
-            f"  • < 0.5%: Excellent\n"
-            f"  • < 1%: Very good\n"
-            f"  • < 2.5%: Medium\n"
-            f"  • < 5%: Poor\n"
-            f"  • > 5%: High variability"
+            f"  • < 0.5%: Excellent - Highly precise\n"
+            f"  • < 1%: Very Good - Good precision\n"
+            f"  • < 2.5%: Medium - Acceptable\n"
+            f"  • < 5%: Poor - Needs improvement\n"
+            f"  • ≥ 5%: High Variability - Action required"
         )
         
         min_tip = (
@@ -682,8 +851,8 @@ class AnalyticsWindow(QWidget):
             f"Definition: Lowest value in the dataset.\n\n"
             f"Current Value: {stats['min']:.6f}{unit_str}\n\n"
             f"Context:\n"
-            f"  • Distance from mean: {abs(stats['min'] - stats['mean']):.4f}\n"
-            f"  • Lower spec limit (LSL): {tol_min:.4f}\n"
+            f"  • Distance from µ (mean): {abs(stats['min'] - stats['mean']):.4f}\n"
+            f"  • LSL (Lower Spec Limit): {tol_min:.4f}\n"
             f"  • Within spec: {'Yes ✓' if stats['min'] >= tol_min else 'No ✗'}"
         )
         
@@ -692,8 +861,8 @@ class AnalyticsWindow(QWidget):
             f"Definition: Highest value in the dataset.\n\n"
             f"Current Value: {stats['max']:.6f}{unit_str}\n\n"
             f"Context:\n"
-            f"  • Distance from mean: {abs(stats['max'] - stats['mean']):.4f}\n"
-            f"  • Upper spec limit (USL): {tol_max:.4f}\n"
+            f"  • Distance from µ (mean): {abs(stats['max'] - stats['mean']):.4f}\n"
+            f"  • USL (Upper Spec Limit): {tol_max:.4f}\n"
             f"  • Within spec: {'Yes ✓' if stats['max'] <= tol_max else 'No ✗'}\n\n"
             f"Range (Max - Min): {stats['max'] - stats['min']:.4f}{unit_str}"
         )
@@ -714,11 +883,17 @@ class AnalyticsWindow(QWidget):
         # Capability metrics with detailed tooltips
         cp_tip = (
             f"━━━ Cp (Process Capability) ━━━\n\n"
+            f"Symbols used:\n"
+            f"  USL = Upper Specification Limit\n"
+            f"  LSL = Lower Specification Limit\n"
+            f"  σ (sigma) = standard deviation\n\n"
             f"Definition: Measures potential process capability\n"
             f"if the process were perfectly centered.\n\n"
             f"Formula: Cp = (USL - LSL) / 6σ\n\n"
             f"Current Calculation:\n"
-            f"  USL = {tol_max:.4f}, LSL = {tol_min:.4f}\n"
+            f"  USL = {tol_max:.4f}\n"
+            f"  LSL = {tol_min:.4f}\n"
+            f"  σ (Std Dev) = {stats['std']:.4f}\n"
             f"  Cp = ({tol_max:.4f} - {tol_min:.4f}) / (6 × {stats['std']:.4f})\n"
             f"  Cp = {capability['cp']:.4f}\n\n"
             f"Rating: {capability['cp_rating']}\n\n"
@@ -731,34 +906,56 @@ class AnalyticsWindow(QWidget):
         
         cpk_tip = (
             f"━━━ Cpk (Process Capability Index) ━━━\n\n"
+            f"Symbols used:\n"
+            f"  USL = Upper Specification Limit\n"
+            f"  LSL = Lower Specification Limit\n"
+            f"  µ (mu) = mean\n"
+            f"  σ (sigma) = standard deviation\n"
+            f"  CPU = Upper capability index\n"
+            f"  CPL = Lower capability index\n\n"
             f"Definition: Measures actual process capability\n"
             f"accounting for process centering.\n\n"
-            f"Formula: Cpk = min(CPU, CPL)\n"
+            f"Formulas:\n"
             f"  CPU = (USL - µ) / 3σ\n"
-            f"  CPL = (µ - LSL) / 3σ\n\n"
+            f"  CPL = (µ - LSL) / 3σ\n"
+            f"  Cpk = min(CPU, CPL)\n\n"
             f"Current Calculation:\n"
-            f"  CPU = ({tol_max:.4f} - {stats['mean']:.4f}) / (3 × {stats['std']:.4f}) = {capability.get('cpu', 0):.4f}\n"
-            f"  CPL = ({stats['mean']:.4f} - {tol_min:.4f}) / (3 × {stats['std']:.4f}) = {capability.get('cpl', 0):.4f}\n"
-            f"  Cpk = min({capability.get('cpu', 0):.4f}, {capability.get('cpl', 0):.4f}) = {capability['cpk']:.4f}\n\n"
+            f"  USL = {tol_max:.4f}, LSL = {tol_min:.4f}\n"
+            f"  µ (Mean) = {stats['mean']:.4f}, σ (Std Dev) = {stats['std']:.4f}\n\n"
+            f"  CPU = (USL - µ) / 3σ\n"
+            f"      = ({tol_max:.4f} - {stats['mean']:.4f}) / (3 × {stats['std']:.4f})\n"
+            f"      = {capability.get('cpu', 0):.4f}\n\n"
+            f"  CPL = (µ - LSL) / 3σ\n"
+            f"      = ({stats['mean']:.4f} - {tol_min:.4f}) / (3 × {stats['std']:.4f})\n"
+            f"      = {capability.get('cpl', 0):.4f}\n\n"
+            f"  Cpk = min(CPU, CPL) = min({capability.get('cpu', 0):.4f}, {capability.get('cpl', 0):.4f})\n"
+            f"      = {capability['cpk']:.4f}\n\n"
             f"Rating: {capability['cpk_rating']}\n\n"
             f"Note: Cpk ≤ Cp always. If Cpk << Cp,\n"
-            f"the process is off-center."
+            f"the process is off-center from the target."
         )
         
         cpm_tip = (
-            f"━━━ Cpm (Taguchi Index) ━━━\n\n"
+            f"━━━ Cpm (Taguchi Capability Index) ━━━\n\n"
+            f"Symbols used:\n"
+            f"  Cp = Process Capability\n"
+            f"  µ (mu) = mean\n"
+            f"  σ (sigma) = standard deviation\n"
+            f"  T = Target (setpoint)\n\n"
             f"Definition: Machine capability index that\n"
-            f"penalizes deviation from target (setpoint).\n\n"
-            f"Formula: Cpm = Cp / √(1 + ((µ - T) / σ)²)\n"
-            f"  where T = Target (setpoint)\n\n"
+            f"penalizes deviation from target.\n\n"
+            f"Formula: Cpm = Cp / √(1 + ((µ - T) / σ)²)\n\n"
             f"Current Calculation:\n"
-            f"  Target (T) = {setpoint:.4f}\n"
-            f"  Deviation = µ - T = {stats['mean'] - setpoint:.4f}\n"
+            f"  Cp = {capability['cp']:.4f}\n"
+            f"  µ (Mean) = {stats['mean']:.4f}\n"
+            f"  T (Target) = {setpoint:.4f}\n"
+            f"  σ (Std Dev) = {stats['std']:.4f}\n\n"
+            f"  Deviation (µ - T) = {stats['mean'] - setpoint:.4f}\n"
             f"  Cpm = {capability['cpm']:.4f}\n\n"
             f"Rating: {capability['cpm_rating']}\n\n"
             f"Interpretation:\n"
-            f"  Cpm accounts for both spread and centering.\n"
-            f"  Lower than Cp indicates off-target process."
+            f"  Cpm accounts for both spread (σ) and centering.\n"
+            f"  If Cpm < Cp, the process is off-target."
         )
         
         def get_cap_color(val):
@@ -832,6 +1029,8 @@ class AnalyticsWindow(QWidget):
         # Update distribution tab
         if 'hist_plot' in panel_refs:
             self._draw_histogram(panel_refs['hist_plot'], dist_data)
+            # Re-add setpoint/tolerance lines after histogram redraw
+            self._update_main_graph_lines(var_name)
         if 'freq_table' in panel_refs:
             self._populate_freq_table(panel_refs['freq_table'], dist_data)
         
@@ -839,14 +1038,33 @@ class AnalyticsWindow(QWidget):
         rsd_val = stats['rsd']
         rsd_color, rsd_rating = self._get_rsd_color_rating(rsd_val)
         
+        # Build updated RSD tooltip
+        rsd_tooltip = (
+            f"━━━ %RSD (CV) ━━━\n\n"
+            f"Relative Standard Deviation\n"
+            f"Also called Coefficient of Variation\n\n"
+            f"Formula: %RSD = (σ / µ) × 100\n\n"
+            f"Current: {rsd_val:.2f}%\n"
+            f"Rating: {rsd_rating}\n\n"
+            f"Rating Guide:\n"
+            f"  • < 0.5%: Excellent\n"
+            f"  • < 1%: Very Good\n"
+            f"  • < 2.5%: Medium\n"
+            f"  • < 5%: Poor\n"
+            f"  • ≥ 5%: High Variability"
+        )
+        
         if 'rsd_display' in panel_refs:
             panel_refs['rsd_display'].setText(f"{rsd_val:.2f}%")
-            panel_refs['rsd_display'].setStyleSheet(f"font-size: 16px; font-weight: bold; color: {rsd_color}; border: none;")
+            panel_refs['rsd_display'].setStyleSheet(f"font-size: 11px; font-weight: bold; color: {rsd_color}; border: none;")
+            panel_refs['rsd_display'].setToolTip(rsd_tooltip)
         if 'rsd_frame' in panel_refs:
-            panel_refs['rsd_frame'].setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 4px; }}")
+            panel_refs['rsd_frame'].setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 3px; }}")
+            panel_refs['rsd_frame'].setToolTip(rsd_tooltip)
         if 'rsd_rating' in panel_refs:
             panel_refs['rsd_rating'].setText(f"({rsd_rating})")
             panel_refs['rsd_rating'].setStyleSheet(f"font-size: 9px; color: {rsd_color}; border: none;")
+            panel_refs['rsd_rating'].setToolTip(rsd_tooltip)
         
         # Update stats tooltips
         self._update_stats_tooltips(panel_refs, stats, capability, var_name)
@@ -899,39 +1117,49 @@ class AnalyticsWindow(QWidget):
             if f'stat_{key}' in panel_refs:
                 panel_refs[f'stat_{key}'].setText(str(val) if key == 'count' else f"{val:.4f}")
         
-        # Build and update detailed tooltips
+        # Build and update detailed tooltips with symbol explanations
         tooltips = {
             'count': (
                 f"━━━ COUNT (n) ━━━\n\n"
-                f"Definition: Total number of valid data points\n"
-                f"in the current sample set.\n\n"
-                f"Current Value: {stats['count']} samples"
+                f"Symbol: n = sample size\n\n"
+                f"Current: n = {stats['count']} samples"
             ),
             'mean': (
-                f"━━━ MEAN (µ) ━━━\n\n"
-                f"Definition: Arithmetic average of all values.\n\n"
+                f"━━━ MEAN (µ) - Average ━━━\n\n"
+                f"Symbol: µ (mu) = arithmetic mean\n\n"
+                f"WHY IT'S USED:\n"
+                f"  • Shows process centering\n"
+                f"  • Detects bias or drift\n\n"
+                f"WHAT IT SHOWS:\n"
+                f"  • If mean ≠ setpoint → off-center\n\n"
                 f"Formula: µ = Σ(xᵢ) / n\n\n"
-                f"Current: µ = {stats['mean']:.6f}{unit_str}\n\n"
-                f"Deviation from setpoint: {abs(stats['mean'] - setpoint):.4f}{unit_str}"
+                f"Current: µ = {stats['mean']:.6f}{unit_str}\n"
+                f"Deviation from target: {abs(stats['mean'] - setpoint):.4f}{unit_str}"
             ),
             'std': (
                 f"━━━ STANDARD DEVIATION (σ) ━━━\n\n"
-                f"Definition: Spread of values around the mean.\n\n"
+                f"Symbol: σ (sigma) = standard deviation\n\n"
+                f"WHY IT'S USED:\n"
+                f"  • Quantifies process consistency\n"
+                f"  • Lower σ = more repeatable\n\n"
+                f"WHAT IT SHOWS:\n"
+                f"  • If σ is large → inconsistent process\n"
+                f"  • If σ increases → equipment issue\n\n"
                 f"Formula: σ = √(Σ(xᵢ - µ)² / n)\n\n"
                 f"Current: σ = {stats['std']:.6f}{unit_str}\n\n"
-                f"68% within: [{stats['mean']-stats['std']:.4f}, {stats['mean']+stats['std']:.4f}]\n"
-                f"95% within: [{stats['mean']-2*stats['std']:.4f}, {stats['mean']+2*stats['std']:.4f}]"
+                f"68% within µ±1σ: [{stats['mean']-stats['std']:.4f}, {stats['mean']+stats['std']:.4f}]\n"
+                f"95% within µ±2σ: [{stats['mean']-2*stats['std']:.4f}, {stats['mean']+2*stats['std']:.4f}]"
             ),
             'min': (
                 f"━━━ MINIMUM ━━━\n\n"
                 f"Current: {stats['min']:.6f}{unit_str}\n\n"
-                f"LSL: {tol_min:.4f}\n"
+                f"LSL (Lower Spec Limit): {tol_min:.4f}\n"
                 f"Within spec: {'Yes ✓' if stats['min'] >= tol_min else 'No ✗'}"
             ),
             'max': (
                 f"━━━ MAXIMUM ━━━\n\n"
                 f"Current: {stats['max']:.6f}{unit_str}\n\n"
-                f"USL: {tol_max:.4f}\n"
+                f"USL (Upper Spec Limit): {tol_max:.4f}\n"
                 f"Within spec: {'Yes ✓' if stats['max'] <= tol_max else 'No ✗'}\n\n"
                 f"Range: {stats['max'] - stats['min']:.4f}{unit_str}"
             )
@@ -943,26 +1171,39 @@ class AnalyticsWindow(QWidget):
             if f'stat_{key}_lbl' in panel_refs:
                 panel_refs[f'stat_{key}_lbl'].setToolTip(tip)
         
-        # Capability tooltips
+        # Capability tooltips with symbol explanations
         cap_tooltips = {
             'cp': (
                 f"━━━ Cp (Process Capability) ━━━\n\n"
+                f"Symbols: USL/LSL = Spec Limits, σ = Std Dev\n\n"
                 f"Formula: Cp = (USL - LSL) / 6σ\n\n"
-                f"Current: Cp = ({tol_max:.4f} - {tol_min:.4f}) / (6 × {stats['std']:.4f})\n"
-                f"       = {capability['cp']:.4f}\n\n"
+                f"Current:\n"
+                f"  USL = {tol_max:.4f}, LSL = {tol_min:.4f}\n"
+                f"  σ (Std Dev) = {stats['std']:.4f}\n"
+                f"  Cp = {capability['cp']:.4f}\n\n"
                 f"Rating: {capability['cp_rating']}"
             ),
             'cpk': (
                 f"━━━ Cpk (Process Capability Index) ━━━\n\n"
-                f"Formula: Cpk = min(CPU, CPL)\n\n"
-                f"CPU = {capability.get('cpu', 0):.4f}, CPL = {capability.get('cpl', 0):.4f}\n"
-                f"Cpk = {capability['cpk']:.4f}\n\n"
+                f"Symbols: USL/LSL = Spec Limits\n"
+                f"         µ = Mean, σ = Std Dev\n\n"
+                f"Formula: Cpk = min(CPU, CPL)\n"
+                f"  CPU = (USL - µ) / 3σ\n"
+                f"  CPL = (µ - LSL) / 3σ\n\n"
+                f"Current:\n"
+                f"  CPU = {capability.get('cpu', 0):.4f}\n"
+                f"  CPL = {capability.get('cpl', 0):.4f}\n"
+                f"  Cpk = {capability['cpk']:.4f}\n\n"
                 f"Rating: {capability['cpk_rating']}"
             ),
             'cpm': (
                 f"━━━ Cpm (Taguchi Index) ━━━\n\n"
-                f"Target deviation: {stats['mean'] - setpoint:.4f}\n"
-                f"Cpm = {capability['cpm']:.4f}\n\n"
+                f"Symbols: Cp = Capability, µ = Mean\n"
+                f"         T = Target, σ = Std Dev\n\n"
+                f"Formula: Cpm = Cp / √(1 + ((µ-T)/σ)²)\n\n"
+                f"Current:\n"
+                f"  µ - T (deviation) = {stats['mean'] - setpoint:.4f}\n"
+                f"  Cpm = {capability['cpm']:.4f}\n\n"
                 f"Rating: {capability['cpm_rating']}"
             )
         }
@@ -987,6 +1228,51 @@ class AnalyticsWindow(QWidget):
             self.update_analytics(force=True)
         except ValueError:
             pass
+    
+    def _on_line_toggle(self, var_name, line_type, state):
+        """Toggle visibility of setpoint or tolerance lines on the main graph."""
+        is_checked = (state == 2)  # Qt.CheckState.Checked = 2
+        if line_type == 'setpoint':
+            self.show_setpoint_line[var_name] = is_checked
+        elif line_type == 'tolerance':
+            self.show_tolerance_lines[var_name] = is_checked
+        self._update_main_graph_lines(var_name)
+    
+    def _choose_line_color(self, var_name, line_type, button):
+        """Open color picker for setpoint or tolerance line."""
+        current_color = self.setpoint_colors.get(var_name, '#00ff00') if line_type == 'setpoint' else self.tolerance_colors.get(var_name, '#ffaa00')
+        color = QColorDialog.getColor(QColor(current_color), self, f"Choose {line_type} line color")
+        if color.isValid():
+            color_str = color.name()
+            if line_type == 'setpoint':
+                self.setpoint_colors[var_name] = color_str
+            elif line_type == 'tolerance':
+                self.tolerance_colors[var_name] = color_str
+            button.setStyleSheet(f"background-color: {color_str}; border: 1px solid #555; border-radius: 3px;")
+            self._update_main_graph_lines(var_name)
+    
+    def _update_main_graph_lines(self, var_name):
+        """Update setpoint and tolerance lines on the main graph in main_window."""
+        if var_name not in self._variable_panels:
+            return
+        
+        panel_refs = self._variable_panels[var_name]
+        graph = panel_refs.get('graph')
+        if not graph:
+            return
+        
+        setpoint = self.setpoints.get(var_name, 0)
+        tolerance = self.tolerances.get(var_name, 1.0)
+        
+        # Update setpoint line on main graph
+        sp_enabled = self.show_setpoint_line.get(var_name, False)
+        sp_color = self.setpoint_colors.get(var_name, '#00ff00')
+        graph.set_setpoint_line(var_name, sp_enabled, setpoint, sp_color)
+        
+        # Update tolerance lines on main graph
+        tol_enabled = self.show_tolerance_lines.get(var_name, False)
+        tol_color = self.tolerance_colors.get(var_name, '#ffaa00')
+        graph.set_tolerance_lines(var_name, tol_enabled, setpoint, tolerance, tol_color)
     
     def _get_rsd_color_rating(self, rsd_val):
         """Get color and rating text for RSD value.

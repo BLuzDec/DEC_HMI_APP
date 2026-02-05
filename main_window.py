@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QDialog, QComboBox, QDialogButtonBox, QFormLayout,
                                QCheckBox, QLineEdit, QMessageBox, QFileDialog,
                                QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView,
-                               QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton)
+                               QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton,
+                               QInputDialog)
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
 import pyqtgraph as pg
@@ -806,6 +807,13 @@ class DynamicPlotWidget(QWidget):
         self._limit_high_line = None
         self._limit_low_line = None
         
+        # Setpoint and tolerance lines (controlled from analytics window)
+        self._setpoint_lines = {}  # var_name -> InfiniteLine
+        self._tolerance_low_lines = {}  # var_name -> InfiniteLine
+        self._tolerance_high_lines = {}  # var_name -> InfiniteLine
+        self._setpoint_settings = {}  # var_name -> {"enabled": bool, "value": float, "color": str}
+        self._tolerance_settings = {}  # var_name -> {"enabled": bool, "value": float (percentage), "color": str}
+        
         # Track start time for time-based graphs
         self.start_time = datetime.now()
         self.start_day_of_year = self.start_time.timetuple().tm_yday
@@ -1056,6 +1064,72 @@ class DynamicPlotWidget(QWidget):
                     self._limit_low_line.setValue(val)
                 except (ValueError, TypeError):
                     pass
+
+    def set_setpoint_line(self, var_name, enabled, value, color='#00ff00'):
+        """Set or update the setpoint line for a variable."""
+        self._setpoint_settings[var_name] = {"enabled": enabled, "value": value, "color": color}
+        self._update_setpoint_line(var_name)
+    
+    def set_tolerance_lines(self, var_name, enabled, setpoint, tolerance_pct, color='#ffaa00'):
+        """Set or update the tolerance lines for a variable."""
+        self._tolerance_settings[var_name] = {
+            "enabled": enabled, 
+            "setpoint": setpoint, 
+            "tolerance_pct": tolerance_pct, 
+            "color": color
+        }
+        self._update_tolerance_lines(var_name)
+    
+    def _update_setpoint_line(self, var_name):
+        """Update or remove the setpoint line for a variable."""
+        # Remove existing line if any
+        if var_name in self._setpoint_lines and self._setpoint_lines[var_name]:
+            try:
+                self.plot_widget.removeItem(self._setpoint_lines[var_name])
+            except:
+                pass
+            self._setpoint_lines[var_name] = None
+        
+        settings = self._setpoint_settings.get(var_name, {})
+        if settings.get("enabled"):
+            color = settings.get("color", "#00ff00")
+            value = settings.get("value", 0)
+            pen = pg.mkPen(color, width=2, style=Qt.DashLine)
+            line = pg.InfiniteLine(pos=value, angle=0, movable=False, pen=pen)
+            line.setZValue(0.5)
+            self.plot_widget.addItem(line, ignoreBounds=True)
+            self._setpoint_lines[var_name] = line
+    
+    def _update_tolerance_lines(self, var_name):
+        """Update or remove the tolerance lines for a variable."""
+        # Remove existing lines if any
+        for line_dict, key in [(self._tolerance_low_lines, var_name), (self._tolerance_high_lines, var_name)]:
+            if key in line_dict and line_dict[key]:
+                try:
+                    self.plot_widget.removeItem(line_dict[key])
+                except:
+                    pass
+                line_dict[key] = None
+        
+        settings = self._tolerance_settings.get(var_name, {})
+        if settings.get("enabled"):
+            color = settings.get("color", "#ffaa00")
+            setpoint = settings.get("setpoint", 0)
+            tolerance_pct = settings.get("tolerance_pct", 1.0)
+            tol_low = setpoint * (1 - tolerance_pct / 100)
+            tol_high = setpoint * (1 + tolerance_pct / 100)
+            
+            pen = pg.mkPen(color, width=2, style=Qt.DashLine)
+            
+            line_low = pg.InfiniteLine(pos=tol_low, angle=0, movable=False, pen=pen)
+            line_low.setZValue(0.5)
+            self.plot_widget.addItem(line_low, ignoreBounds=True)
+            self._tolerance_low_lines[var_name] = line_low
+            
+            line_high = pg.InfiniteLine(pos=tol_high, angle=0, movable=False, pen=pen)
+            line_high.setZValue(0.5)
+            self.plot_widget.addItem(line_high, ignoreBounds=True)
+            self._tolerance_high_lines[var_name] = line_high
 
     def _on_x_range_changed_manually(self, *args):
         """User zoomed or panned (1-button mode or scroll) – stop auto-following X."""
@@ -2611,6 +2685,59 @@ class MainWindow(QMainWindow):
         self.btn_analytics.clicked.connect(self.open_analytics_window)
         self.sidebar_layout.addWidget(self.btn_analytics)
         
+        # Graph configuration save/load section
+        config_row = QWidget()
+        config_layout = QHBoxLayout(config_row)
+        config_layout.setContentsMargins(0, 4, 0, 0)
+        config_layout.setSpacing(4)
+        
+        self.btn_save_config = QPushButton("💾 Save")
+        self.btn_save_config.setCursor(Qt.PointingHandCursor)
+        self.btn_save_config.setStyleSheet("""
+            QPushButton { background-color: #3a5a3a; color: #e0e0e0; font-size: 11px; padding: 6px 8px; border: 1px solid #3e3e42; border-radius: 3px; }
+            QPushButton:hover { background-color: #4a6a4a; }
+            QPushButton:pressed { background-color: #2a4a2a; }
+        """)
+        self.btn_save_config.setToolTip("Save current graph configuration (variables, settings, limits)")
+        self.btn_save_config.clicked.connect(self._save_graph_config)
+        config_layout.addWidget(self.btn_save_config)
+        
+        self.config_load_combo = QComboBox()
+        self.config_load_combo.setStyleSheet("""
+            QComboBox { background-color: #444; color: white; border: 1px solid #555; padding: 5px; font-size: 11px; }
+            QComboBox:hover { background-color: #505050; }
+            QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #094771; }
+        """)
+        self.config_load_combo.setToolTip("Load a saved graph configuration")
+        self.config_load_combo.setMinimumWidth(100)
+        self._refresh_config_list()
+        config_layout.addWidget(self.config_load_combo, 1)
+        
+        self.btn_load_config = QPushButton("📂 Load")
+        self.btn_load_config.setCursor(Qt.PointingHandCursor)
+        self.btn_load_config.setStyleSheet("""
+            QPushButton { background-color: #3a4a5a; color: #e0e0e0; font-size: 11px; padding: 6px 8px; border: 1px solid #3e3e42; border-radius: 3px; }
+            QPushButton:hover { background-color: #4a5a6a; }
+            QPushButton:pressed { background-color: #2a3a4a; }
+        """)
+        self.btn_load_config.setToolTip("Load selected graph configuration")
+        self.btn_load_config.clicked.connect(self._load_graph_config)
+        config_layout.addWidget(self.btn_load_config)
+        
+        self.btn_delete_config = QPushButton("🗑")
+        self.btn_delete_config.setCursor(Qt.PointingHandCursor)
+        self.btn_delete_config.setFixedWidth(28)
+        self.btn_delete_config.setStyleSheet("""
+            QPushButton { background-color: #5a3a3a; color: #e0e0e0; font-size: 11px; padding: 6px; border: 1px solid #3e3e42; border-radius: 3px; }
+            QPushButton:hover { background-color: #6a4a4a; }
+            QPushButton:pressed { background-color: #4a2a2a; }
+        """)
+        self.btn_delete_config.setToolTip("Delete selected configuration")
+        self.btn_delete_config.clicked.connect(self._delete_graph_config)
+        config_layout.addWidget(self.btn_delete_config)
+        
+        self.sidebar_layout.addWidget(config_row)
+        
         # Analytics window instance (created on demand)
         self.analytics_window = None
 
@@ -3918,6 +4045,210 @@ class MainWindow(QMainWindow):
             self.analytics_window.set_graphs(self.graphs, self.variable_metadata)
             self.analytics_window.raise_()
             self.analytics_window.activateWindow()
+
+    def _refresh_config_list(self):
+        """Refresh the dropdown list of saved graph configurations."""
+        self.config_load_combo.clear()
+        self.config_load_combo.addItem("-- Select config --", "")
+        s = QSettings("ProAutomation", "Studio")
+        configs = s.value("graph_configs", {})
+        if isinstance(configs, dict):
+            for name in sorted(configs.keys()):
+                self.config_load_combo.addItem(name, name)
+
+    def _save_graph_config(self):
+        """Save current graph configuration with a user-provided name."""
+        if not self.graphs:
+            QMessageBox.information(self, "No Graphs", "Please create at least one graph to save.")
+            return
+        
+        # Ask for config name
+        name, ok = QInputDialog.getText(
+            self, "Save Configuration", "Enter a short name for this configuration:",
+            QLineEdit.Normal, ""
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()[:30]  # Limit name length
+        
+        # Collect all graph configurations
+        graph_configs = []
+        for graph in self.graphs:
+            config = {
+                "variables": list(graph.variables),
+                "x_axis": graph.x_axis_source,
+                "buffer_size": graph.buffer_size,
+                "graph_title": getattr(graph, "custom_title", "") or "",
+                "y_axis_mode": getattr(graph, "y_axis_mode", "auto"),
+                "y_axis_assignments": getattr(graph, "y_axis_assignments", None),
+                "display_deadband": getattr(graph, "display_deadband", 0),
+                "discrete_index_linked_variable": getattr(graph, "discrete_index_linked_variable", None),
+                "limit_high": getattr(graph, "limit_high_config", {"enabled": False}),
+                "limit_low": getattr(graph, "limit_low_config", {"enabled": False}),
+            }
+            graph_configs.append(config)
+        
+        # Save to QSettings
+        s = QSettings("ProAutomation", "Studio")
+        all_configs = s.value("graph_configs", {})
+        if not isinstance(all_configs, dict):
+            all_configs = {}
+        all_configs[name] = graph_configs
+        s.setValue("graph_configs", all_configs)
+        
+        self._refresh_config_list()
+        # Select the just-saved config
+        idx = self.config_load_combo.findData(name)
+        if idx >= 0:
+            self.config_load_combo.setCurrentIndex(idx)
+        
+        QMessageBox.information(self, "Saved", f"Configuration '{name}' saved with {len(graph_configs)} graph(s).")
+
+    def _load_graph_config(self):
+        """Load a saved graph configuration."""
+        name = self.config_load_combo.currentData()
+        if not name:
+            QMessageBox.information(self, "No Selection", "Please select a configuration to load.")
+            return
+        
+        s = QSettings("ProAutomation", "Studio")
+        all_configs = s.value("graph_configs", {})
+        if not isinstance(all_configs, dict) or name not in all_configs:
+            QMessageBox.warning(self, "Not Found", f"Configuration '{name}' not found.")
+            return
+        
+        graph_configs = all_configs[name]
+        if not graph_configs:
+            QMessageBox.warning(self, "Empty", "This configuration has no graphs.")
+            return
+        
+        # Confirm if there are existing graphs
+        if self.graphs:
+            reply = QMessageBox.question(
+                self, "Replace Graphs?",
+                f"This will remove existing {len(self.graphs)} graph(s) and load {len(graph_configs)} graph(s) from '{name}'.\n\nContinue?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            # Remove all existing graphs
+            for graph in list(self.graphs):
+                parent = graph.parent()
+                if parent:
+                    parent.setParent(None)
+                    parent.deleteLater()
+            self.graphs.clear()
+        
+        # Create graphs from configuration
+        is_offline = self.data_mode_combo.currentText() == "Offline Data"
+        loaded_count = 0
+        
+        for config in graph_configs:
+            var_names = config.get("variables", [])
+            if not var_names:
+                continue
+            
+            # Check variables exist
+            missing = [v for v in var_names if v not in self.all_variables]
+            if missing:
+                logging.warning(f"Skipping graph: missing variables {missing}")
+                continue
+            
+            settings = {
+                "x_axis": config.get("x_axis", "Time (Index)"),
+                "buffer_size": config.get("buffer_size", 100000),
+                "graph_title": config.get("graph_title", ""),
+                "y_axis_mode": config.get("y_axis_mode", "auto"),
+                "y_axis_assignments": config.get("y_axis_assignments"),
+                "display_deadband": config.get("display_deadband", 0),
+                "discrete_index_linked_variable": config.get("discrete_index_linked_variable"),
+                "limit_high": config.get("limit_high", {"enabled": False}),
+                "limit_low": config.get("limit_low", {"enabled": False}),
+            }
+            
+            # Create graph (similar to add_new_graph but using saved settings)
+            container = QFrame()
+            container.setStyleSheet("background-color: #252526; border-radius: 6px;")
+            vbox = QVBoxLayout(container)
+            vbox.setContentsMargins(10, 10, 10, 10)
+            vbox.setSpacing(5)
+
+            header = QWidget(styleSheet="background-color: transparent;")
+            hbox = QHBoxLayout(header)
+            hbox.setContentsMargins(0, 0, 0, 0)
+            lbl_title = QLabel("", styleSheet="font-weight: bold; color: #ccc; font-size: 13px;")
+            btn_close = QPushButton("✕", fixedWidth=24, fixedHeight=24, cursor=Qt.PointingHandCursor)
+            btn_close.setStyleSheet("""
+                QPushButton { background-color: transparent; color: #888; border-radius: 12px; font-weight: bold; }
+                QPushButton:hover { background-color: #cc3333; color: white; }
+            """)
+            hbox.addWidget(lbl_title)
+            hbox.addStretch()
+            hbox.addWidget(btn_close)
+            vbox.addWidget(header)
+
+            buffer_size = settings.get("buffer_size", 100000)
+            try:
+                comm_speed = float(self.speed_input.text())
+                if comm_speed <= 0:
+                    comm_speed = 0.05
+            except ValueError:
+                comm_speed = 0.05
+
+            new_graph = DynamicPlotWidget(
+                var_names,
+                x_axis_source=settings["x_axis"],
+                buffer_size=buffer_size,
+                recipe_params=self.recipe_params,
+                latest_values_cache=self.latest_values,
+                variable_metadata=self.variable_metadata,
+                comm_speed=comm_speed,
+                graph_title=settings.get("graph_title", ""),
+                y_axis_mode=settings.get("y_axis_mode", "auto"),
+                y_axis_assignments=settings.get("y_axis_assignments"),
+                display_deadband=settings.get("display_deadband", 0),
+                discrete_index_linked_variable=settings.get("discrete_index_linked_variable"),
+                limit_high=settings.get("limit_high"),
+                limit_low=settings.get("limit_low"),
+                all_variable_list=self.all_variables,
+            )
+            vbox.addWidget(new_graph)
+            container.lbl_title = lbl_title
+            container.graph = new_graph
+            lbl_title.setText(new_graph.get_display_title())
+            self.graph_splitter.addWidget(container)
+            self.graphs.append(new_graph)
+            btn_close.clicked.connect(lambda checked=False, c=container, g=new_graph: self.remove_graph(c, g))
+            loaded_count += 1
+        
+        if loaded_count > 0:
+            QMessageBox.information(self, "Loaded", f"Loaded {loaded_count} graph(s) from '{name}'.")
+        else:
+            QMessageBox.warning(self, "Load Failed", "No graphs could be loaded (missing variables?).")
+
+    def _delete_graph_config(self):
+        """Delete a saved graph configuration."""
+        name = self.config_load_combo.currentData()
+        if not name:
+            QMessageBox.information(self, "No Selection", "Please select a configuration to delete.")
+            return
+        
+        reply = QMessageBox.question(
+            self, "Delete Configuration?",
+            f"Are you sure you want to delete configuration '{name}'?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        
+        s = QSettings("ProAutomation", "Studio")
+        all_configs = s.value("graph_configs", {})
+        if isinstance(all_configs, dict) and name in all_configs:
+            del all_configs[name]
+            s.setValue("graph_configs", all_configs)
+        
+        self._refresh_config_list()
+        QMessageBox.information(self, "Deleted", f"Configuration '{name}' deleted.")
 
     def toggle_pause(self):
         """Toggle pause: freeze current values so user can zoom, pan, or export without new data updating the graphs."""
