@@ -1,16 +1,16 @@
-Variable,Type,Min,Max,Unit,Name
-rEjectingPressure1,Real,0,10,bar,Ejecting pressure 1
-rTimerEjection1,Real,0,100,s,Timer ejection 1
-rEjectingPressure2,Real,0,10,bar,Ejecting pressure 2
-rTimerEjection2,Real,0,100,s,Timer ejection 2
-rUncloggingPressure,Real,0,10,bar,Unclogging pressure
-rVacuumPressure1,Real,0,10,bar,Vacuum pressure 1
-rTimerSuction,Real,0,100,s,Timer suction
-rVacuumPressure2,Real,0,10,bar,Vacuum pressure 2
-rDelayAlternateVacuum,Real,0,100,s,Delay alternate vacuum
-rDelayCloseOutletValve,Real,0,100,s,Delay close outlet valve
-rDelaySetEjectingPressure1,Real,0,100,s,Delay set ejecting pressure 1
-rVibratorPressure,Real,0,10,bar,Vibrator pressure
-rTimerVibrator,Real,0,100,s,Timer vibrator
-rDelayVibrator,Real,0,100,s,Delay vibrator
-rDelayAtmPressure,Real,0,100,s,Delay atm pressure
+Variable;Type;Min;Max;Unit;Name
+rEjectingPressure1;Real;0;10;bar;Ejecting pressure 1
+rTimerEjection1;Real;0;100;s;Timer ejection 1
+rEjectingPressure2;Real;0;10;bar;Ejecting pressure 2
+rTimerEjection2;Real;0;100;s;Timer ejection 2
+rUncloggingPressure;Real;0;10;bar;Unclogging pressure
+rVacuumPressure1;Real;0;10;bar;Vacuum pressure 1
+rTimerSuction;Real;0;100;s;Timer suction
+rVacuumPressure2;Real;0;10;bar;Vacuum pressure 2
+rDelayAlternateVacuum;Real;0;100;s;Delay alternate vacuum
+rDelayCloseOutletValve;Real;0;100;s;Delay close outlet valve
+rDelaySetEjectingPressure1;Real;0;100;s;Delay set ejecting pressure 1
+rVibratorPressure;Real;0;10;bar;Vibrator pressure
+rTimerVibrator;Real;0;100;s;Timer vibrator
+rDelayVibrator;Real;0;100;s;Delay vibrator
+rDelayAtmPressure;Real;0;100;s;Delay atm pressure

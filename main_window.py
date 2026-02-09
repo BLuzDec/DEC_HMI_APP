@@ -4418,14 +4418,196 @@ class MainWindow(QMainWindow):
         self._load_graph_config()
 
     def _show_about(self):
-        """Show an About dialog for the application."""
-        QMessageBox.about(
-            self,
-            "About Dec ProAutomation Studio",
-            "<b>Dec ProAutomation Studio</b><br><br>"
-            "PLC monitoring, graph visualization &amp; analytics tool.<br><br>"
-            "Built with PySide6 &amp; pyqtgraph."
+        """Show a stylish About dialog for the application."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About Dec ProAutomation Studio")
+        dlg.setFixedSize(460, 420)
+        dlg.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a1a2e, stop:0.5 #16213e, stop:1 #0f3460);
+                border: 1px solid #007ACC;
+                border-radius: 12px;
+            }
+            QLabel {
+                border: none;
+                background: transparent;
+            }
+            QFrame {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(30, 25, 30, 25)
+        layout.setSpacing(0)
+
+        # ── App icon ──
+        icon = _app_icon()
+        if not icon.isNull():
+            icon_label = QLabel()
+            icon_label.setAlignment(Qt.AlignCenter)
+            pix = icon.pixmap(72, 72)
+            icon_label.setPixmap(pix)
+            icon_label.setStyleSheet("background: transparent; margin-bottom: 6px;")
+            layout.addWidget(icon_label)
+
+        # ── App title ──
+        title = QLabel("Dec ProAutomation Studio")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            background: transparent;
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: bold;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-bottom: 2px;
+        """)
+        layout.addWidget(title)
+
+        # ── Version ──
+        version = QLabel("Version 1.0.0")
+        version.setAlignment(Qt.AlignCenter)
+        version.setStyleSheet("""
+            background: transparent;
+            color: #7eb8da;
+            font-size: 12px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-bottom: 14px;
+        """)
+        layout.addWidget(version)
+
+        # ── Separator line ──
+        sep = QFrame()
+        sep.setFrameShape(QFrame.NoFrame)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #007ACC; border: none; margin: 4px 40px;")
+        layout.addWidget(sep)
+
+        # ── Description ──
+        desc = QLabel("PLC monitoring, real-time graph visualization\n& advanced analytics tool.")
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("""
+            background: transparent;
+            color: #c0c0c0;
+            font-size: 12px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 12px 0px;
+        """)
+        layout.addWidget(desc)
+
+        # ── Tech badge ──
+        tech = QLabel("Built with PySide6  |  pyqtgraph  |  DuckDB")
+        tech.setAlignment(Qt.AlignCenter)
+        tech.setStyleSheet("""
+            background: rgba(0, 122, 204, 0.15);
+            color: #7eb8da;
+            font-size: 10px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            padding: 5px 12px;
+            border-radius: 10px;
+            margin: 4px 30px 14px 30px;
+        """)
+        layout.addWidget(tech)
+
+        # ── Separator line ──
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.NoFrame)
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background-color: #007ACC; border: none; margin: 4px 40px;")
+        layout.addWidget(sep2)
+
+        # ── Creator section ──
+        creator_title = QLabel("DEVELOPED BY")
+        creator_title.setAlignment(Qt.AlignCenter)
+        creator_title.setStyleSheet("""
+            background: transparent;
+            color: #5a7a9a;
+            font-size: 9px;
+            font-weight: bold;
+            letter-spacing: 3px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-top: 12px;
+            margin-bottom: 2px;
+        """)
+        layout.addWidget(creator_title)
+
+        creator = QLabel("DEC S&T")
+        creator.setAlignment(Qt.AlignCenter)
+        creator.setStyleSheet("""
+            background: transparent;
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: bold;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-bottom: 10px;
+        """)
+        layout.addWidget(creator)
+
+        # ── Contact info ──
+        contact = QLabel(
+            '<span style="color:#5a7a9a;">Contact: </span>'
+            '<a href="mailto:b.luz@dec-group.swiss" style="color:#4fc3f7; text-decoration:none;">'
+            'b.luz@dec-group.swiss</a>'
         )
+        contact.setAlignment(Qt.AlignCenter)
+        contact.setOpenExternalLinks(True)
+        contact.setStyleSheet("""
+            background: transparent;
+            font-size: 12px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-bottom: 6px;
+        """)
+        layout.addWidget(contact)
+
+        # ── Copyright ──
+        copy_lbl = QLabel(f"\u00A9 {datetime.now().year} DEC Group. All rights reserved.")
+        copy_lbl.setAlignment(Qt.AlignCenter)
+        copy_lbl.setStyleSheet("""
+            background: transparent;
+            color: #555555;
+            font-size: 10px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-top: 4px;
+            margin-bottom: 14px;
+        """)
+        layout.addWidget(copy_lbl)
+
+        # ── Close button ──
+        close_btn = QPushButton("Close")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setFixedWidth(110)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #007ACC, stop:1 #005f99);
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: bold;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                padding: 7px 20px;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a8fd4, stop:1 #007ACC);
+            }
+            QPushButton:pressed {
+                background: #005f99;
+            }
+        """)
+        close_btn.clicked.connect(dlg.accept)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        dlg.exec()
 
     def load_variables(self):
         """Load variables from the chosen exchange and recipe CSV files (browsable; any filename)."""
@@ -4436,7 +4618,7 @@ class MainWindow(QMainWindow):
         # Load boolean variables from JSON for trigger dropdown (Snap7)
         boolean_vars = []
         try:
-            config_path = os.path.join("external", "snap7_node_ids.json")
+            config_path = os.path.join(os.path.dirname(__file__), "external", "snap7_node_ids.json")
             with open(config_path, 'r') as f:
                 config = json.load(f)
                 node_config = config.get('Node_id_flexpts_S7_1500_snap7', {})

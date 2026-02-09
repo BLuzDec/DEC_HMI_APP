@@ -450,18 +450,19 @@ class AnalyticsWindow(QWidget):
                                  round(self.tolerances.get(var_name, 1.0), 6))
                     if self._last_data_hash.get(var_name) == data_hash:
                         continue
-                    self._last_data_hash[var_name] = data_hash
                     
                     y_array = np.array(y_data, dtype=float)
                     y_array = y_array[~(np.isnan(y_array) | np.isinf(y_array))]
                     
                     if len(y_array) == 0:
+                        self._last_data_hash[var_name] = data_hash
                         continue
                     
                     # Apply X-axis range and tolerance filters
                     y_array = self._apply_filters(graph, var_name, y_array)
                     
                     if len(y_array) == 0:
+                        self._last_data_hash[var_name] = data_hash
                         continue
                     
                     analyzer = DataAnalyzer(y_array.reshape(-1, 1), [var_name])
@@ -489,8 +490,14 @@ class AnalyticsWindow(QWidget):
                     # Skip tab updates for "waiting" panels (they have no tabs yet)
                     if 'tabs' in panel_refs:
                         self._update_all_tabs(panel_refs, var_name, stats, dist_data, capability)
-                except Exception:
-                    # Prevent silent failures from blocking all updates
+                    
+                    # Only save hash AFTER successful update
+                    self._last_data_hash[var_name] = data_hash
+                except Exception as e:
+                    # Log the error so it's visible in the terminal, then continue
+                    import traceback
+                    print(f"[Analytics] Update error for '{var_name}': {e}")
+                    traceback.print_exc()
                     continue
     
     def _create_graph_panel(self, graph, graph_idx):

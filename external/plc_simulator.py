@@ -64,11 +64,26 @@ class PLCSimulator(QThread):
 
         self.tick = 0
 
+    @staticmethod
+    def _detect_delimiter(path):
+        """Auto-detect CSV delimiter (comma or semicolon) from the first line."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                first_line = f.readline()
+                if ";" in first_line and "," not in first_line:
+                    return ";"
+                if first_line.count(";") > first_line.count(","):
+                    return ";"
+        except Exception:
+            pass
+        return ","
+
     def _load_variables(self):
         variables = []
         if os.path.exists(self.csv_path):
-            with open(self.csv_path, mode='r', newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
+            delimiter = self._detect_delimiter(self.csv_path)
+            with open(self.csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile, delimiter=delimiter)
                 variables = list(reader)
         # Fallback if CSV is locked or empty
         if not variables:
@@ -102,8 +117,9 @@ class PLCSimulator(QThread):
         variables = []
         if os.path.exists(recipe_path):
             try:
+                delimiter = self._detect_delimiter(recipe_path)
                 with open(recipe_path, mode='r', newline='', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
+                    reader = csv.DictReader(f, delimiter=delimiter)
                     variables = [row for row in reader if (row.get('Variable') or '').strip()]
             except Exception as e:
                 print(f"Warning: Could not read recipe_variables.csv: {e}")

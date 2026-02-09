@@ -1,24 +1,24 @@
-Variable,Type,Min,Max,Unit,Name,Decimals
-Dose_number,Int,0,1000,count,Dose number,0
-StableWeight,Real,0,10,g,Stable weight,4
-TargetWeight,Real,0,10,g,Target weight,4
-EjectorPosition,Real,0,100,%,Ejector position,2
-InstantDensity,Real,0,10,g/cm³,Instant density,4
-AvgDensity,Real,0,10,g/cm³,Avg density,4
-FlexPTS_running,Bool,0,1,-,FlexPTS running,0
-PT_ChamberValve,Real,0,10,bar,PT chamber valve,3
-PR_ChamberValve,Real,0,10,bar,PR chamber valve,3
-PT_OutletValve,Real,0,10,bar,PT outlet valve,3
-PR_OutletValve,Real,0,10,bar,PR outlet valve,3
-arrPT_chamber,Array,0,10,bar,PT chamber array,3
-arrPR_chamber,Array,0,10,bar,PR chamber array,3
-FlexPTS_running_Keyence1,Bool,0,1,-,FlexPTS Keyence1,0
-FT_Keyence1,Real,0,1000,N,FT Keyence1,2
-PT_Keyence1,Real,0,10,bar,PT Keyence1,3
-arrPT_Keyence1,Array,0,10,bar,PT Keyence1 array,3
-arrFT_Keyence1,Array,0,1000,N,FT Keyence1 array,2
-FlexPTS_running_Keyence2,Bool,0,1,-,FlexPTS Keyence2,0
-FT_Keyence2,Real,0,1000,N,FT Keyence2,2
-PT_Keyence2,Real,0,10,bar,PT Keyence2,3
-arrPT_Keyence2,Array,0,10,bar,PT Keyence2 array,3
-arrFT_Keyence2,Array,0,1000,N,FT Keyence2 array,2
+Variable;Type;Min;Max;Unit;Name
+Dose_number;Int;0;1000;count;Dose number
+StableWeight;Real;0;10;g;Stable weight
+TargetWeight;Real;0;10;g;Target weight
+EjectorPosition;Real;0;100;%;Ejector position
+InstantDensity;Real;0;10;g/cm³;Instant density
+AvgDensity;Real;0;10;g/cm³;Avg density
+FlexPTS_running;Bool;0;1;-;FlexPTS running
+PT_ChamberValve;Real;0;10;bar;PT chamber valve
+PR_ChamberValve;Real;0;10;bar;PR chamber valve
+PT_OutletValve;Real;0;10;bar;PT outlet valve
+PR_OutletValve;Real;0;10;bar;PR outlet valve
+arrPT_chamber;Array;0;10;bar;PT chamber array
+arrPR_chamber;Array;0;10;bar;PR chamber array
+FlexPTS_running_Keyence1;Bool;0;1;-;FlexPTS Keyence1
+FT_Keyence1;Real;0;1000;N;FT Keyence1
+PT_Keyence1;Real;0;10;bar;PT Keyence1
+arrPT_Keyence1;Array;0;10;bar;PT Keyence1 array
+arrFT_Keyence1;Array;0;1000;N;FT Keyence1 array
+FlexPTS_running_Keyence2;Bool;0;1;-;FlexPTS Keyence2
+FT_Keyence2;Real;0;1000;N;FT Keyence2
+PT_Keyence2;Real;0;10;bar;PT Keyence2
+arrPT_Keyence2;Array;0;10;bar;PT Keyence2 array
+arrFT_Keyence2;Array;0;1000;N;FT Keyence2 array

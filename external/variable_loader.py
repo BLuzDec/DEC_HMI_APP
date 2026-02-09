@@ -61,6 +61,20 @@ def _display_label(name: Optional[str], unit: Optional[str], variable_id: str) -
     return label
 
 
+def _detect_delimiter(path: str) -> str:
+    """Auto-detect CSV delimiter (comma or semicolon) from the first line."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            first_line = f.readline()
+            if ";" in first_line and "," not in first_line:
+                return ";"
+            if first_line.count(";") > first_line.count(","):
+                return ";"
+    except Exception:
+        pass
+    return ","
+
+
 def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
     """
     Load exchange variables CSV. Returns (list of variable names, metadata dict).
@@ -76,8 +90,9 @@ def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
         return variables, metadata
 
     try:
+        delimiter = _detect_delimiter(path)
         with open(path, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+            reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 var_name = (row.get("Variable") or "").strip()
                 if not var_name:
@@ -134,8 +149,9 @@ def load_recipe_csv(
         return recipe_params, metadata
 
     try:
+        delimiter = _detect_delimiter(path)
         with open(path, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+            reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 var_name = (row.get("Variable") or "").strip()
                 if not var_name:

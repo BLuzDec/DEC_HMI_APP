@@ -1,44 +1,121 @@
 # main_window.spec
-
-# This is a PyInstaller spec file. It tells PyInstaller how to build your application.
-# To use it, run: pyinstaller main_window.spec
+#
+# PyInstaller spec file for ProAutomation Studio.
+# Bundles the full application with all data files, images, DLLs, and
+# the external/ package resources so it runs on PCs without Python,
+# TwinCAT, or any other runtime pre-installed.
+#
+# Usage:  pyinstaller main_window.spec
 
 import sys
 import os
 
-# Get the directory of the spec file
-base_dir = os.path.dirname(os.path.abspath(__file__))
+# ── paths ────────────────────────────────────────────────────────────
+# SPECPATH is injected by PyInstaller – it points to the folder containing this .spec file
+base_dir = SPECPATH
+external_dir = os.path.join(base_dir, 'external')
+images_dir = os.path.join(base_dir, 'Images')
 
-# --- Data files to be included ---
-# List of tuples: (source_path, destination_in_bundle)
-# '.' for destination means the root of the bundle, alongside the executable.
+# ── data files to bundle ─────────────────────────────────────────────
+# Tuple format:  (source_path, destination_folder_in_bundle)
+# '.' = bundle root  |  'external' = <bundle>/external/  etc.
 datas = [
-    ('exchange_variables.csv', '.'),
-    ('snap7_node_ids.json', '.'),
-    ('database.py', '.'),
-    ('plc_simulator.py', '.')
+    # ── Images ───────────────────────────────────────────────────────
+    (os.path.join(images_dir, 'Dec Group_bleu_noir_transparent.png'), 'Images'),
+    (os.path.join(images_dir, 'Dec True end-to-end final white_small.png'), 'Images'),
+    (os.path.join(images_dir, 'dec_background_endToEnd_bottomRight.png'), 'Images'),
+    (os.path.join(images_dir, 'DEC_G-2016_WHITE.png'), 'Images'),
+
+    # ── External: CSV config files ───────────────────────────────────
+    (os.path.join(external_dir, 'exchange_variables.csv'), 'external'),
+    (os.path.join(external_dir, 'recipe_variables.csv'), 'external'),
+    (os.path.join(external_dir, 'exchange_variables_ads.csv'), 'external'),
+    (os.path.join(external_dir, 'recipe_variables_ads.csv'), 'external'),
+
+    # ── External: JSON config ────────────────────────────────────────
+    (os.path.join(external_dir, 'snap7_node_ids.json'), 'external'),
+
+    # ── Root-level JSON (legacy reference from plc_thread.py) ────────
+    (os.path.join(base_dir, 'snap7_node_ids.json'), '.'),
 ]
 
-# --- Native binaries to be included ---
+# ── native binaries ──────────────────────────────────────────────────
 binaries = [
-    ('snap7.dll', '.')
+    (os.path.join(base_dir, 'snap7.dll'), '.'),
 ]
 
+# ── hidden imports ───────────────────────────────────────────────────
+# Libraries that PyInstaller's static analysis may miss.
+hidden_imports = [
+    # pyqtgraph internal templates
+    'pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyqt5',
+    'pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyside6',
+    'pyqtgraph.graphicsItems.PlotItem.plotConfigTemplate_pyqt5',
+    'pyqtgraph.graphicsItems.PlotItem.plotConfigTemplate_pyside6',
+    # PySide6 backends
+    'PySide6.QtSvg',
+    'PySide6.QtPrintSupport',
+    # duckdb
+    'duckdb',
+    # numeric / scientific
+    'numpy',
+    'scipy',
+    'scipy.signal',
+    'scipy.interpolate',
+    # communication
+    'snap7',
+    'snap7.client',
+    'snap7.util',
+    'pyads',
+    # web / analytics (Dash + Flask)
+    'flask',
+    'flask_cors',
+    'waitress',
+    'dash',
+    'dash.dependencies',
+    'plotly',
+    'plotly.graph_objects',
+    'plotly.express',
+    'pandas',
+    'matplotlib',
+    # our own package
+    'external',
+    'external.plc_thread',
+    'external.plc_ads_thread',
+    'external.plc_simulator',
+    'external.variable_loader',
+    'external.analytics_window',
+    'external.calculations',
+    'external.database',
+    # misc
+    'psutil',
+    'json',
+    'csv',
+    'logging',
+    'collections',
+]
+
+# ── Analysis ─────────────────────────────────────────────────────────
 a = Analysis(
-    ['main_window.py'],
+    ['main.py'],                         # entry point
     pathex=[base_dir],
     binaries=binaries,
     datas=datas,
-    hiddenimports=['pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyqt5'], # Common hidden import for pyqtgraph
+    hiddenimports=hidden_imports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter', '_tkinter',           # not used – save space
+        'unittest',
+        'test',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=None,
-    noarchive=False
+    noarchive=False,
 )
 
+# ── Build objects ────────────────────────────────────────────────────
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe = EXE(
@@ -46,19 +123,22 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ProAutomation Studio', # The name of your executable
+    name='ProAutomation Studio',         # executable name
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False, # Set to False for GUI applications to hide the console window
-    icon=None, # You can specify a path to a .ico file here
+    console=False,                       # GUI app – no console window
+    # To set a custom icon, place a .ico file in Images/ and reference it here:
+    # icon=os.path.join(images_dir, 'app_icon.ico'),
+    icon=None,
     upx_exclude=[],
     runtime_tmpdir=None,
     version=None,
     uac_admin=False,
-    manifest=None
+    manifest=None,
 )
+
 coll = COLLECT(
     exe,
     a.binaries,
@@ -67,5 +147,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ProAutomationApp' # The name of the output folder in 'dist'
+    name='ProAutomationApp',             # output folder: dist/ProAutomationApp/
 )
