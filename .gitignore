@@ -1,2 +1,16 @@
 # Virtual environment
 venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Installer output
+InstallerOutput/
