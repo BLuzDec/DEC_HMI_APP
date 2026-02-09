@@ -238,8 +238,10 @@ class DataAnalyzer:
             return {
                 'cp': float('inf') if (usl - lsl) > 0 else 0,
                 'cpk': float('inf') if (usl - lsl) > 0 else 0,
+                'cpm': float('inf') if (usl - lsl) > 0 else 0,
                 'cp_rating': 'N/A (σ=0)',
-                'cpk_rating': 'N/A (σ=0)'
+                'cpk_rating': 'N/A (σ=0)',
+                'cpm_rating': 'N/A (σ=0)'
             }
         
         # Cp: Process Capability (how much the tolerance covers relative to 6σ)

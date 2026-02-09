@@ -11,10 +11,10 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QFrame, QPushButton, QScrollArea,
     QLineEdit, QGridLayout, QProxyStyle, QStyle, QApplication,
-    QTabWidget, QCheckBox, QColorDialog
+    QTabWidget, QCheckBox, QColorDialog, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, QEvent
-from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont
+from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont, QIcon
 
 from external.calculations import DataAnalyzer
 
@@ -34,6 +34,116 @@ class FastTooltipStyle(QProxyStyle):
         return super().styleHint(hint, option, widget, returnData)
 
 
+def _app_icon_analytics():
+    """Load app icon for the analytics window (same as main window)."""
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    dec_group = os.path.join(base, "Images", "Dec Group_bleu_noir_transparent.png")
+    if os.path.isfile(dec_group):
+        pix = QPixmap(dec_group)
+        if not pix.isNull():
+            icon = QIcon()
+            for size in (16, 24, 32, 48):
+                scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                icon.addPixmap(scaled)
+            return icon
+    return QIcon()
+
+
+class _AnalyticsTitleBar(QWidget):
+    """Custom dark title bar for the Analytics window (icon + title + window controls)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._parent = parent
+        self._drag_pos = None
+        self.setFixedHeight(32)
+        self.setStyleSheet("background-color: #1e1e1e;")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # App icon
+        icon_label = QLabel()
+        icon_label.setFixedSize(18, 18)
+        icon = _app_icon_analytics()
+        if not icon.isNull():
+            icon_label.setPixmap(icon.pixmap(16, 16))
+        layout.addWidget(icon_label)
+        layout.addSpacing(8)
+
+        # Title
+        title = QLabel("Graph Analytics")
+        title.setStyleSheet("color: #cccccc; font-size: 12px; background: transparent;")
+        title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(title)
+
+        # Draggable spacer
+        spacer = QLabel()
+        spacer.setStyleSheet("background: transparent;")
+        spacer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(spacer, 1)
+
+        # Window control buttons
+        btn_style_normal = """
+            QPushButton {
+                background-color: transparent; color: #999999; border: none;
+                font-family: "Segoe MDL2 Assets"; font-size: 10px;
+                padding: 0px; min-width: 46px; min-height: 32px;
+            }
+            QPushButton:hover { background-color: #3e3e42; color: #ffffff; }
+        """
+        btn_style_close = """
+            QPushButton {
+                background-color: transparent; color: #999999; border: none;
+                font-family: "Segoe MDL2 Assets"; font-size: 10px;
+                padding: 0px; min-width: 46px; min-height: 32px;
+            }
+            QPushButton:hover { background-color: #e81123; color: #ffffff; }
+        """
+
+        btn_min = QPushButton("\uE921")
+        btn_min.setStyleSheet(btn_style_normal)
+        btn_min.clicked.connect(parent.showMinimized)
+
+        self.btn_max = QPushButton("\uE922")
+        self.btn_max.setStyleSheet(btn_style_normal)
+        self.btn_max.clicked.connect(self._toggle_maximize)
+
+        btn_close = QPushButton("\uE8BB")
+        btn_close.setStyleSheet(btn_style_close)
+        btn_close.clicked.connect(parent.close)
+
+        layout.addWidget(btn_min)
+        layout.addWidget(self.btn_max)
+        layout.addWidget(btn_close)
+
+    def _toggle_maximize(self):
+        if self._parent.isMaximized():
+            self._parent.showNormal()
+            self.btn_max.setText("\uE922")
+        else:
+            self._parent.showMaximized()
+            self.btn_max.setText("\uE923")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self._parent.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self._parent.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._toggle_maximize()
+
+
 class AnalyticsWindow(QWidget):
     """Analytics window with time-series tracking of metrics."""
     
@@ -43,7 +153,11 @@ class AnalyticsWindow(QWidget):
         super().__init__(parent)
         self.setWindowTitle('Graph Analytics')
         self.resize(1100, 700)
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        
+        icon = _app_icon_analytics()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         
         app = QApplication.instance()
         if app and not isinstance(app.style(), FastTooltipStyle):
@@ -53,6 +167,7 @@ class AnalyticsWindow(QWidget):
         self.variable_metadata = {}
         self.setpoints = {}
         self.tolerances = {}
+        self._user_set_setpoint = set()  # Track which vars have user-set setpoints
         
         # Line display settings
         self.show_setpoint_line = {}  # var_name -> bool
@@ -74,9 +189,29 @@ class AnalyticsWindow(QWidget):
         
         self._apply_theme()
         
-        main_layout = QVBoxLayout(self)
+        # Root layout: custom title bar on top, content below
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(1, 0, 1, 1)
+        root_layout.setSpacing(0)
+
+        self._title_bar = _AnalyticsTitleBar(self)
+        root_layout.addWidget(self._title_bar)
+
+        content = QWidget()
+        main_layout = QVBoxLayout(content)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
+        root_layout.addWidget(content, 1)
+        # Resize grip in bottom-right corner
+        from PySide6.QtWidgets import QSizeGrip
+        _grip = QSizeGrip(self)
+        _grip.setFixedSize(12, 12)
+        _grip.setStyleSheet("QSizeGrip { background: transparent; }")
+        _grip_row = QHBoxLayout()
+        _grip_row.setContentsMargins(0, 0, 0, 0)
+        _grip_row.addStretch()
+        _grip_row.addWidget(_grip)
+        root_layout.addLayout(_grip_row)
         
         # Header
         header_layout = QHBoxLayout()
@@ -120,7 +255,6 @@ class AnalyticsWindow(QWidget):
         self.refresh_timer.timeout.connect(self.update_analytics)
         self.refresh_timer.start(1000)  # Update every second for smoother graphs
         
-        self._load_background()
         self.scroll.viewport().installEventFilter(self)
     
     def eventFilter(self, obj, event):
@@ -145,21 +279,6 @@ class AnalyticsWindow(QWidget):
             QTabBar::tab:selected { background-color: #3e3e42; color: #fff; }
         """)
     
-    def _load_background(self):
-        try:
-            img_path = resource_path("Images/DEC_G-2016_WHITE.png")
-            self.background_image = QPixmap(img_path).scaled(60, 30, Qt.AspectRatioMode.KeepAspectRatio) if os.path.exists(img_path) else None
-        except:
-            self.background_image = None
-    
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.background_image:
-            painter = QPainter(self)
-            # Center the image horizontally, position near top
-            x = (self.width() - self.background_image.width()) // 2
-            painter.setOpacity(0.15)  # Make it a subtle background watermark
-            painter.drawPixmap(x, 15, self.background_image)
     
     def _toggle_auto_refresh(self, checked):
         self.auto_refresh_btn.setText("Auto-Refresh: ON" if checked else "Auto-Refresh: OFF")
@@ -204,10 +323,91 @@ class AnalyticsWindow(QWidget):
     def _get_unit(self, var_name):
         return self.variable_metadata.get(var_name, {}).get("unit", "").strip()
     
+    def _get_x_values_for_analytics(self, graph, n):
+        """Get X values array of length n corresponding to buffered data points.
+        
+        Matches the X values used by the plot so that the axis range settings
+        correctly map to the underlying data indices/values.
+        """
+        try:
+            if getattr(graph, 'is_discrete_index', False):
+                x_disc = list(getattr(graph, 'buffers_x_discrete', []))
+                if x_disc and len(x_disc) >= n:
+                    arr = np.array(x_disc[:n], dtype=float)
+                    if not np.any(np.isnan(arr)):
+                        return arr
+                return np.arange(1, n + 1, dtype=float)
+            elif getattr(graph, 'is_xy_plot', False):
+                x_src = getattr(graph, 'x_axis_source', '')
+                x_raw = list(graph.buffers_x.get(x_src, []))
+                if x_raw and len(x_raw) >= n:
+                    arr = np.array(x_raw[:n], dtype=float)
+                    if not np.any(np.isnan(arr)):
+                        return arr
+                return np.arange(0, n, dtype=float)
+        except (ValueError, TypeError):
+            pass
+        # Time (Index) or fallback: 0-based indices matching pyqtgraph default
+        return np.arange(0, n, dtype=float)
+    
+    def _apply_filters(self, graph, var_name, y_array):
+        """Apply X-axis range and tolerance filters to analytics data.
+        
+        1. X-axis filter: When X range is not 'auto', only include data points
+           whose X value falls within [x_min, x_max].
+        2. Tolerance filter: Only include data points within setpoint ± tolerance%.
+        """
+        if len(y_array) == 0:
+            return y_array
+        
+        # --- X-axis range filter ---
+        range_settings = getattr(graph, 'range_settings', {})
+        x_settings = range_settings.get('x', {})
+        if not x_settings.get('auto', True):
+            n = len(y_array)
+            x_array = self._get_x_values_for_analytics(graph, n)
+            min_len = min(len(x_array), n)
+            x_array = x_array[:min_len]
+            y_array = y_array[:min_len]
+            
+            x_min = x_settings.get('min', -np.inf)
+            x_max = x_settings.get('max', np.inf)
+            x_mask = (x_array >= x_min) & (x_array <= x_max)
+            y_array = y_array[x_mask]
+        
+        if len(y_array) == 0:
+            return y_array
+        
+        # --- Tolerance filter (only if user explicitly set a setpoint) ---
+        if var_name in self._user_set_setpoint:
+            setpoint = self.setpoints.get(var_name, 0.0)
+            tolerance = self.tolerances.get(var_name, 1.0)
+            if setpoint != 0.0 and tolerance > 0:
+                half_range = abs(setpoint) * tolerance / 100
+                tol_min = setpoint - half_range
+                tol_max = setpoint + half_range
+                tol_mask = (y_array >= tol_min) & (y_array <= tol_max)
+                y_array = y_array[tol_mask]
+        
+        return y_array
+    
     def update_analytics(self, force=False):
         if not self.graphs or (self._user_interacting and not force):
             return
-        if force or not self._variable_panels:
+        # Rebuild if forced, no panels yet, or any panel was "waiting" and now has data
+        needs_rebuild = force or not self._variable_panels
+        if not needs_rebuild:
+            for graph in self.graphs:
+                for var_name in graph.variables:
+                    refs = self._variable_panels.get(var_name)
+                    if refs and 'waiting_label' in refs:
+                        y_data = list(graph.buffers_y.get(var_name, []))
+                        if y_data:
+                            needs_rebuild = True
+                            break
+                if needs_rebuild:
+                    break
+        if needs_rebuild:
             self._rebuild_ui()
         else:
             self._update_values_only()
@@ -232,54 +432,69 @@ class AnalyticsWindow(QWidget):
         
         for graph in self.graphs:
             for var_name in graph.variables:
-                if var_name not in self._variable_panels:
+                try:
+                    if var_name not in self._variable_panels:
+                        continue
+                    
+                    y_data = list(graph.buffers_y.get(var_name, []))
+                    if not y_data:
+                        continue
+                    
+                    # Include range/tolerance settings in hash so analytics update when they change
+                    range_settings = getattr(graph, 'range_settings', {})
+                    x_settings = range_settings.get('x', {})
+                    data_hash = (len(y_data), round(y_data[-1], 10) if y_data else 0,
+                                 x_settings.get('auto', True),
+                                 round(x_settings.get('min', 0), 6), round(x_settings.get('max', 0), 6),
+                                 round(self.setpoints.get(var_name, 0), 6),
+                                 round(self.tolerances.get(var_name, 1.0), 6))
+                    if self._last_data_hash.get(var_name) == data_hash:
+                        continue
+                    self._last_data_hash[var_name] = data_hash
+                    
+                    y_array = np.array(y_data, dtype=float)
+                    y_array = y_array[~(np.isnan(y_array) | np.isinf(y_array))]
+                    
+                    if len(y_array) == 0:
+                        continue
+                    
+                    # Apply X-axis range and tolerance filters
+                    y_array = self._apply_filters(graph, var_name, y_array)
+                    
+                    if len(y_array) == 0:
+                        continue
+                    
+                    analyzer = DataAnalyzer(y_array.reshape(-1, 1), [var_name])
+                    stats = analyzer.calculate_basic_stats(var_name)
+                    dist_data = analyzer.calculate_frequency_distribution(var_name)
+                    
+                    setpoint = self.setpoints.get(var_name, stats['mean'])
+                    tolerance = self.tolerances.get(var_name, 1.0)
+                    capability = analyzer.calculate_process_capability(setpoint, tolerance, stats['std'], stats['mean'])
+                    
+                    # Add to history
+                    history = self.metric_history.get(var_name)
+                    if history:
+                        history['time'].append(self.history_counter)
+                        history['rsd'].append(stats['rsd'])
+                        history['cp'].append(capability['cp'])
+                        history['cpk'].append(capability['cpk'])
+                        history['cpm'].append(capability['cpm'])
+                    
+                    panel_refs = self._variable_panels[var_name]
+                    panel_refs['raw_data'] = y_array
+                    panel_refs['stats'] = stats
+                    panel_refs['capability'] = capability
+                    
+                    # Skip tab updates for "waiting" panels (they have no tabs yet)
+                    if 'tabs' in panel_refs:
+                        self._update_all_tabs(panel_refs, var_name, stats, dist_data, capability)
+                except Exception:
+                    # Prevent silent failures from blocking all updates
                     continue
-                
-                y_data = list(graph.buffers_y.get(var_name, []))
-                if not y_data:
-                    continue
-                
-                data_hash = (len(y_data), y_data[-1] if y_data else 0)
-                if self._last_data_hash.get(var_name) == data_hash:
-                    continue
-                self._last_data_hash[var_name] = data_hash
-                
-                y_array = np.array(y_data, dtype=float)
-                y_array = y_array[~(np.isnan(y_array) | np.isinf(y_array))]
-                
-                if len(y_array) == 0:
-                    continue
-                
-                analyzer = DataAnalyzer(y_array.reshape(-1, 1), [var_name])
-                stats = analyzer.calculate_basic_stats(var_name)
-                dist_data = analyzer.calculate_frequency_distribution(var_name)
-                
-                setpoint = self.setpoints.get(var_name, stats['mean'])
-                tolerance = self.tolerances.get(var_name, 1.0)
-                capability = analyzer.calculate_process_capability(setpoint, tolerance, stats['std'], stats['mean'])
-                
-                # Add to history
-                history = self.metric_history.get(var_name)
-                if history:
-                    history['time'].append(self.history_counter)
-                    history['rsd'].append(stats['rsd'])
-                    history['cp'].append(capability['cp'])
-                    history['cpk'].append(capability['cpk'])
-                    history['cpm'].append(capability['cpm'])
-                
-                panel_refs = self._variable_panels[var_name]
-                panel_refs['raw_data'] = y_array
-                panel_refs['stats'] = stats
-                panel_refs['capability'] = capability
-                
-                self._update_all_tabs(panel_refs, var_name, stats, dist_data, capability)
     
     def _create_graph_panel(self, graph, graph_idx):
-        if not graph.variables or not graph.buffers_y:
-            return None
-        
-        has_data = any(len(graph.buffers_y.get(var, [])) > 0 for var in graph.variables)
-        if not has_data:
+        if not graph.variables:
             return None
         
         panel = QFrame()
@@ -304,28 +519,44 @@ class AnalyticsWindow(QWidget):
     
     def _create_variable_tabs(self, graph, var_name):
         y_data = list(graph.buffers_y.get(var_name, []))
-        if not y_data:
-            return None
-        
-        y_array = np.array(y_data, dtype=float)
-        y_array = y_array[~(np.isnan(y_array) | np.isinf(y_array))]
-        
-        if len(y_array) == 0:
-            return None
         
         display_name = self._get_display_name(var_name)
         unit = self._get_unit(var_name)
         
-        analyzer = DataAnalyzer(y_array.reshape(-1, 1), [var_name])
-        stats = analyzer.calculate_basic_stats(var_name)
-        dist_data = analyzer.calculate_frequency_distribution(var_name)
+        # Parse raw data
+        if y_data:
+            y_array_raw = np.array(y_data, dtype=float)
+            y_array_raw = y_array_raw[~(np.isnan(y_array_raw) | np.isinf(y_array_raw))]
+        else:
+            y_array_raw = np.array([], dtype=float)
         
-        if var_name not in self.setpoints or self.setpoints[var_name] == 0.0:
-            self.setpoints[var_name] = stats['mean']
+        # Initialize setpoint from unfiltered data if needed
+        if len(y_array_raw) > 0 and (var_name not in self.setpoints or self.setpoints[var_name] == 0.0):
+            self.setpoints[var_name] = float(np.mean(y_array_raw))
         
-        setpoint = self.setpoints.get(var_name, stats['mean'])
-        tolerance = self.tolerances.get(var_name, 1.0)
-        capability = analyzer.calculate_process_capability(setpoint, tolerance, stats['std'], stats['mean'])
+        # Apply X-axis range and tolerance filters
+        if len(y_array_raw) > 0:
+            y_array = self._apply_filters(graph, var_name, y_array_raw.copy())
+        else:
+            y_array = y_array_raw
+        
+        has_data = len(y_array) > 0
+        
+        # Compute stats only if we have data
+        if has_data:
+            analyzer = DataAnalyzer(y_array.reshape(-1, 1), [var_name])
+            stats = analyzer.calculate_basic_stats(var_name)
+            dist_data = analyzer.calculate_frequency_distribution(var_name)
+            
+            setpoint = self.setpoints.get(var_name, stats['mean'])
+            tolerance = self.tolerances.get(var_name, 1.0)
+            capability = analyzer.calculate_process_capability(setpoint, tolerance, stats['std'], stats['mean'])
+        else:
+            stats = {'mean': 0, 'std': 0, 'rsd': 0, 'min': 0, 'max': 0, 'count': 0, 'range': 0, 'median': 0}
+            dist_data = {'bins': [], 'counts': [], 'bin_centers': [], 'bin_width': 0}
+            setpoint = self.setpoints.get(var_name, 0.0)
+            tolerance = self.tolerances.get(var_name, 1.0)
+            capability = {'cp': 0, 'cpk': 0, 'cpm': 0, 'cp_rating': 'N/A', 'cpk_rating': 'N/A', 'cpm_rating': 'N/A'}
         
         # Initialize history
         if var_name not in self.metric_history:
@@ -337,18 +568,20 @@ class AnalyticsWindow(QWidget):
                 'time': deque(maxlen=self.MAX_HISTORY)
             }
         
-        # Add initial point
-        history = self.metric_history[var_name]
-        self.history_counter += 1
-        history['time'].append(self.history_counter)
-        history['rsd'].append(stats['rsd'])
-        history['cp'].append(capability['cp'])
-        history['cpk'].append(capability['cpk'])
-        history['cpm'].append(capability['cpm'])
+        # Add initial point (only if we have real data)
+        if has_data:
+            history = self.metric_history[var_name]
+            self.history_counter += 1
+            history['time'].append(self.history_counter)
+            history['rsd'].append(stats['rsd'])
+            history['cp'].append(capability['cp'])
+            history['cpk'].append(capability['cpk'])
+            history['cpm'].append(capability['cpm'])
         
         panel_refs = {
             'raw_data': y_array, 'stats': stats, 'capability': capability,
-            'display_name': display_name, 'unit': unit, 'graph': graph
+            'display_name': display_name, 'unit': unit, 'graph': graph,
+            'has_data': has_data
         }
         
         container = QFrame()
@@ -437,28 +670,35 @@ class AnalyticsWindow(QWidget):
         header_layout.addWidget(tol_color_btn)
         panel_refs['tol_color_btn'] = tol_color_btn
         
-        # Tab widget
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #3e3e42; background-color: #1e1e1e; }
-            QTabBar::tab { background-color: #2d2d30; color: #999; padding: 6px 12px; font-size: 10px; }
-            QTabBar::tab:selected { background-color: #1e1e1e; color: #fff; }
-        """)
-        
-        tab1 = self._create_distribution_tab(var_name, stats, dist_data, capability, panel_refs)
-        tab2 = self._create_metric_trend_tab(var_name, 'rsd', '%RSD', '%', panel_refs)
-        tab3 = self._create_metric_trend_tab(var_name, 'cp', 'Cp', '', panel_refs)
-        tab4 = self._create_metric_trend_tab(var_name, 'cpk', 'Cpk', '', panel_refs)
-        tab5 = self._create_metric_trend_tab(var_name, 'cpm', 'Cpm', '', panel_refs)
-        
-        tabs.addTab(tab1, "Distribution")
-        tabs.addTab(tab2, "%RSD Trend")
-        tabs.addTab(tab3, "Cp Trend")
-        tabs.addTab(tab4, "Cpk Trend")
-        tabs.addTab(tab5, "Cpm Trend")
-        
-        panel_refs['tabs'] = tabs
-        main_layout.addWidget(tabs)
+        # Tab widget (or waiting message if no data yet)
+        if not has_data:
+            waiting_label = QLabel("Waiting for data...")
+            waiting_label.setStyleSheet("color: #888; font-size: 12px; padding: 20px; border: none;")
+            waiting_label.setAlignment(Qt.AlignCenter)
+            main_layout.addWidget(waiting_label)
+            panel_refs['waiting_label'] = waiting_label
+        else:
+            tabs = QTabWidget()
+            tabs.setStyleSheet("""
+                QTabWidget::pane { border: 1px solid #3e3e42; background-color: #1e1e1e; }
+                QTabBar::tab { background-color: #2d2d30; color: #999; padding: 6px 12px; font-size: 10px; }
+                QTabBar::tab:selected { background-color: #1e1e1e; color: #fff; }
+            """)
+            
+            tab1 = self._create_distribution_tab(var_name, stats, dist_data, capability, panel_refs)
+            tab2 = self._create_metric_trend_tab(var_name, 'rsd', '%RSD', '%', panel_refs)
+            tab3 = self._create_metric_trend_tab(var_name, 'cp', 'Cp', '', panel_refs)
+            tab4 = self._create_metric_trend_tab(var_name, 'cpk', 'Cpk', '', panel_refs)
+            tab5 = self._create_metric_trend_tab(var_name, 'cpm', 'Cpm', '', panel_refs)
+            
+            tabs.addTab(tab1, "Distribution")
+            tabs.addTab(tab2, "%RSD Trend")
+            tabs.addTab(tab3, "Cp Trend")
+            tabs.addTab(tab4, "Cpk Trend")
+            tabs.addTab(tab5, "Cpm Trend")
+            
+            panel_refs['tabs'] = tabs
+            main_layout.addWidget(tabs)
         
         self._variable_panels[var_name] = panel_refs
         self._last_data_hash[var_name] = (len(y_data), y_data[-1] if y_data else 0)
@@ -566,13 +806,15 @@ class AnalyticsWindow(QWidget):
                 
                 # Find closest data point
                 history = self.metric_history.get(var_name, {})
-                if history and len(history['time']) > 0:
+                if history and len(history.get('time', [])) > 0 and len(history.get(metric_key, [])) > 0:
                     times = list(history['time'])
                     values = list(history[metric_key])
+                    n = min(len(times), len(values))
+                    times, values = times[:n], values[:n]
                     
                     # Find nearest x index
-                    if len(times) > 0:
-                        idx = min(range(len(times)), key=lambda i: abs(times[i] - x))
+                    if n > 0:
+                        idx = min(range(n), key=lambda i: abs(times[i] - x))
                         snap_x = times[idx]
                         snap_y = values[idx]
                         
@@ -593,10 +835,13 @@ class AnalyticsWindow(QWidget):
         proxy = pg.SignalProxy(plot_widget.scene().sigMouseMoved, rateLimit=60, slot=mouse_moved)
         panel_refs[f'{metric_key}_proxy'] = proxy  # Keep reference to prevent garbage collection
         
-        # Draw initial data
+        # Draw initial data (truncate to min length to prevent shape mismatch)
         history = self.metric_history.get(var_name, {})
-        if history and len(history['time']) > 0:
-            curve.setData(list(history['time']), list(history[metric_key]))
+        if history and len(history.get('time', [])) > 0 and len(history.get(metric_key, [])) > 0:
+            times = list(history['time'])
+            values = list(history[metric_key])
+            n = min(len(times), len(values))
+            curve.setData(times[:n], values[:n])
         
         layout.addWidget(plot_widget, stretch=3)
         
@@ -1022,9 +1267,11 @@ class AnalyticsWindow(QWidget):
         
         for metric_key in ['rsd', 'cp', 'cpk', 'cpm']:
             if f'{metric_key}_curve' in panel_refs and history:
-                times = list(history['time'])
-                values = list(history[metric_key])
-                panel_refs[f'{metric_key}_curve'].setData(times, values)
+                times = list(history.get('time', []))
+                values = list(history.get(metric_key, []))
+                n = min(len(times), len(values))
+                if n > 0:
+                    panel_refs[f'{metric_key}_curve'].setData(times[:n], values[:n])
             
             # Update current value display
             if f'{metric_key}_current' in panel_refs:
@@ -1171,8 +1418,11 @@ class AnalyticsWindow(QWidget):
             value = float(text)
             if setting_type == 'setpoint':
                 self.setpoints[var_name] = value
+                self._user_set_setpoint.add(var_name)
             elif setting_type == 'tolerance':
                 self.tolerances[var_name] = value
+                # Also mark as user-set so tolerance filter activates
+                self._user_set_setpoint.add(var_name)
             self.update_analytics(force=True)
         except ValueError:
             pass
@@ -1247,6 +1497,48 @@ class AnalyticsWindow(QWidget):
         colors = ["#78B674", "#86B870", "#96BA6D", "#A8BC6B", "#BAAD66", "#BC9B5E", "#BE8657", "#C07152", "#C2584D"]
         return colors[min(int(ratio * (len(colors) - 1)), len(colors) - 1)]
     
+    # ── Frameless window edge-resizing (Windows native hit-test) ────────
+    _BORDER = 8
+
+    def nativeEvent(self, eventType, message):
+        """Handle Windows WM_NCHITTEST for edge/corner resize on frameless window."""
+        try:
+            import ctypes
+            import ctypes.wintypes
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0084:  # WM_NCHITTEST
+                x = msg.lParam & 0xFFFF
+                y = (msg.lParam >> 16) & 0xFFFF
+                if x >= 0x8000:
+                    x -= 0x10000
+                if y >= 0x8000:
+                    y -= 0x10000
+                geo = self.frameGeometry()
+                b = self._BORDER
+                left = abs(x - geo.left()) <= b
+                right = abs(x - geo.right()) <= b
+                top = abs(y - geo.top()) <= b
+                bottom = abs(y - geo.bottom()) <= b
+                if top and left:
+                    return True, 13
+                if top and right:
+                    return True, 14
+                if bottom and left:
+                    return True, 16
+                if bottom and right:
+                    return True, 17
+                if left:
+                    return True, 10
+                if right:
+                    return True, 11
+                if top:
+                    return True, 12
+                if bottom:
+                    return True, 15
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
+
     def closeEvent(self, event):
         self.refresh_timer.stop()
         self._interaction_timer.stop()

@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QCheckBox, QLineEdit, QMessageBox, QFileDialog,
                                QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView,
                                QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton,
-                               QInputDialog)
-from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime
+                               QInputDialog, QMenuBar, QSizeGrip, QSizePolicy)
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime, QPoint
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
 import pyqtgraph as pg
 from collections import deque
@@ -1356,9 +1356,11 @@ class DynamicPlotWidget(QWidget):
     def _setup_plot_hover(self):
         """Set up hover tooltip and crosshair for all plot types (time, discrete index, XY)."""
         self.crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('gray', style=Qt.DashLine))
+        self.crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('white', width=1, style=Qt.DashLine))
         self.tooltip = pg.TextItem(anchor=(0, 1), color='#ddd', fill=QColor(0, 0, 0, 150))
         self.tooltip.setZValue(2)
         self.plot_widget.addItem(self.crosshair_v, ignoreBounds=True)
+        self.plot_widget.addItem(self.crosshair_h, ignoreBounds=True)
         self.plot_widget.addItem(self.tooltip, ignoreBounds=True)
         self.tooltip.hide()
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
@@ -2174,6 +2176,7 @@ class DynamicPlotWidget(QWidget):
         if not self.plot_widget.sceneBoundingRect().contains(pos):
             self.tooltip.hide()
             self.crosshair_v.hide()
+            self.crosshair_h.hide()
             return
         vb = self.plot_widget.plotItem.vb
         mouse_point = vb.mapSceneToView(pos)
@@ -2196,6 +2199,7 @@ class DynamicPlotWidget(QWidget):
             if min_len == 0:
                 self.tooltip.hide()
                 self.crosshair_v.hide()
+                self.crosshair_h.hide()
                 return
             x_data = np.array(list(self.buffers_x_discrete)[:min_len], dtype=float)
             # Truncate y data to match x data length
@@ -2212,6 +2216,7 @@ class DynamicPlotWidget(QWidget):
         if len(x_data) == 0:
             self.tooltip.hide()
             self.crosshair_v.hide()
+            self.crosshair_h.hide()
             return
 
         idx = np.abs(x_data - mouse_point.x()).argmin()
@@ -2327,6 +2332,13 @@ class DynamicPlotWidget(QWidget):
         self.tooltip.show()
         self.crosshair_v.setPos(x_val)
         self.crosshair_v.show()
+        # Horizontal crosshair: snap to the reference variable's Y value at this index
+        ref_y_data = filtered_y_data.get(ref_var, [])
+        if ref_y_data and idx < len(ref_y_data):
+            self.crosshair_h.setPos(float(ref_y_data[idx]))
+            self.crosshair_h.show()
+        else:
+            self.crosshair_h.hide()
 
 
 class _GraphAreaWithBackground(QWidget):
@@ -2353,6 +2365,123 @@ class _GraphAreaWithBackground(QWidget):
         super().paintEvent(event)
 
 
+class _CustomTitleBar(QWidget):
+    """Custom dark title bar that embeds the QMenuBar alongside the window title and controls."""
+
+    def __init__(self, parent: QMainWindow):
+        super().__init__(parent)
+        self._parent = parent
+        self._drag_pos = None
+        self.setFixedHeight(32)
+        self.setStyleSheet("background-color: #1e1e1e;")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # App icon
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(18, 18)
+        icon = _app_icon()
+        if not icon.isNull():
+            pix = icon.pixmap(16, 16)
+            self.icon_label.setPixmap(pix)
+        layout.addWidget(self.icon_label)
+        layout.addSpacing(10)
+
+        # Menu bar (embedded) – fixed width so it doesn't eat the draggable area
+        self.menu_bar = QMenuBar()
+        self.menu_bar.setStyleSheet("""
+            QMenuBar {
+                background-color: transparent;
+                color: #cccccc;
+                border: none;
+                font-size: 12px;
+            }
+            QMenuBar::item {
+                background-color: transparent;
+                padding: 6px 10px;
+                border-radius: 3px;
+            }
+            QMenuBar::item:selected {
+                background-color: #3e3e42;
+                color: #ffffff;
+            }
+            QMenuBar::item:pressed {
+                background-color: #007ACC;
+                color: #ffffff;
+            }
+        """)
+        self.menu_bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        layout.addWidget(self.menu_bar)
+
+        # Draggable spacer – this empty label lets mouse events pass to the title bar for dragging
+        self._drag_spacer = QLabel()
+        self._drag_spacer.setStyleSheet("background: transparent;")
+        self._drag_spacer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self._drag_spacer, 1)  # stretch factor = 1
+
+        # Window control buttons (minimize, maximize/restore, close)
+        btn_style_normal = """
+            QPushButton {
+                background-color: transparent; color: #999999; border: none;
+                font-family: "Segoe MDL2 Assets"; font-size: 10px;
+                padding: 0px; min-width: 46px; min-height: 32px;
+            }
+            QPushButton:hover { background-color: #3e3e42; color: #ffffff; }
+        """
+        btn_style_close = """
+            QPushButton {
+                background-color: transparent; color: #999999; border: none;
+                font-family: "Segoe MDL2 Assets"; font-size: 10px;
+                padding: 0px; min-width: 46px; min-height: 32px;
+            }
+            QPushButton:hover { background-color: #e81123; color: #ffffff; }
+        """
+
+        self.btn_minimize = QPushButton("\uE921")  # Minimize glyph
+        self.btn_minimize.setStyleSheet(btn_style_normal)
+        self.btn_minimize.clicked.connect(parent.showMinimized)
+
+        self.btn_maximize = QPushButton("\uE922")  # Maximize glyph
+        self.btn_maximize.setStyleSheet(btn_style_normal)
+        self.btn_maximize.clicked.connect(self._toggle_maximize)
+
+        self.btn_close = QPushButton("\uE8BB")  # Close glyph
+        self.btn_close.setStyleSheet(btn_style_close)
+        self.btn_close.clicked.connect(parent.close)
+
+        layout.addWidget(self.btn_minimize)
+        layout.addWidget(self.btn_maximize)
+        layout.addWidget(self.btn_close)
+
+    def _toggle_maximize(self):
+        if self._parent.isMaximized():
+            self._parent.showNormal()
+            self.btn_maximize.setText("\uE922")
+        else:
+            self._parent.showMaximized()
+            self.btn_maximize.setText("\uE923")  # Restore glyph
+
+    # ── Dragging ──
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self._parent.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self._parent.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._toggle_maximize()
+
+
 class MainWindow(QMainWindow):
     data_signal = Signal(str, object)
     status_signal = Signal(str, str, object)  # status_type, message, details
@@ -2360,6 +2489,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Dec ProAutomation Studio")
+        self.setWindowFlags(Qt.FramelessWindowHint)
         self.resize(1280, 800)
         _icon = _app_icon()
         if not _icon.isNull():
@@ -2372,8 +2502,32 @@ class MainWindow(QMainWindow):
         self.exchange_variables_path = os.path.join(_ext, "exchange_variables.csv")
         self.recipe_variables_path = os.path.join(_ext, "recipe_variables.csv")
         self.apply_theme()
+
+        # Custom title bar with embedded menu
+        self._title_bar = _CustomTitleBar(self)
+        self._create_menu_bar()
+
+        # Wrap everything in a vertical layout: title bar on top, content below
+        _root = QWidget()
+        _root.setStyleSheet("QWidget#_rootWidget { border: 1px solid #3e3e42; }")
+        _root.setObjectName("_rootWidget")
+        _root_layout = QVBoxLayout(_root)
+        _root_layout.setContentsMargins(1, 0, 1, 1)  # thin border for resize grip visibility
+        _root_layout.setSpacing(0)
+        _root_layout.addWidget(self._title_bar)
+
         self.main_widget = QWidget()
-        self.setCentralWidget(self.main_widget)
+        _root_layout.addWidget(self.main_widget, 1)
+        # Small resize grip in bottom-right corner
+        _grip = QSizeGrip(self)
+        _grip.setFixedSize(12, 12)
+        _grip.setStyleSheet("QSizeGrip { background: transparent; }")
+        _grip_row = QHBoxLayout()
+        _grip_row.setContentsMargins(0, 0, 0, 0)
+        _grip_row.addStretch()
+        _grip_row.addWidget(_grip)
+        _root_layout.addLayout(_grip_row)
+        self.setCentralWidget(_root)
         self.main_layout = QHBoxLayout(self.main_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
@@ -2873,59 +3027,11 @@ class MainWindow(QMainWindow):
         self.btn_analytics.clicked.connect(self.open_analytics_window)
         self.sidebar_layout.addWidget(self.btn_analytics)
         
-        # Graph configuration save/load section
-        config_row = QWidget()
-        config_layout = QHBoxLayout(config_row)
-        config_layout.setContentsMargins(0, 4, 0, 0)
-        config_layout.setSpacing(4)
-        
-        self.btn_save_config = QPushButton("💾 Save")
-        self.btn_save_config.setCursor(Qt.PointingHandCursor)
-        self.btn_save_config.setStyleSheet("""
-            QPushButton { background-color: #3a5a3a; color: #e0e0e0; font-size: 11px; padding: 6px 8px; border: 1px solid #3e3e42; border-radius: 3px; }
-            QPushButton:hover { background-color: #4a6a4a; }
-            QPushButton:pressed { background-color: #2a4a2a; }
-        """)
-        self.btn_save_config.setToolTip("Save current graph configuration (variables, settings, limits)")
-        self.btn_save_config.clicked.connect(self._save_graph_config)
-        config_layout.addWidget(self.btn_save_config)
-        
+        # Hidden combo for graph config load/save/delete (used by menu bar actions)
         self.config_load_combo = QComboBox()
-        self.config_load_combo.setStyleSheet("""
-            QComboBox { background-color: #444; color: white; border: 1px solid #555; padding: 5px; font-size: 11px; }
-            QComboBox:hover { background-color: #505050; }
-            QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #094771; }
-        """)
-        self.config_load_combo.setToolTip("Load a saved graph configuration")
-        self.config_load_combo.setMinimumWidth(100)
+        self.config_load_combo.hide()
         self._refresh_config_list()
-        config_layout.addWidget(self.config_load_combo, 1)
-        
-        self.btn_load_config = QPushButton("📂 Load")
-        self.btn_load_config.setCursor(Qt.PointingHandCursor)
-        self.btn_load_config.setStyleSheet("""
-            QPushButton { background-color: #3a4a5a; color: #e0e0e0; font-size: 11px; padding: 6px 8px; border: 1px solid #3e3e42; border-radius: 3px; }
-            QPushButton:hover { background-color: #4a5a6a; }
-            QPushButton:pressed { background-color: #2a3a4a; }
-        """)
-        self.btn_load_config.setToolTip("Load selected graph configuration")
-        self.btn_load_config.clicked.connect(self._load_graph_config)
-        config_layout.addWidget(self.btn_load_config)
-        
-        self.btn_delete_config = QPushButton("🗑")
-        self.btn_delete_config.setCursor(Qt.PointingHandCursor)
-        self.btn_delete_config.setFixedWidth(28)
-        self.btn_delete_config.setStyleSheet("""
-            QPushButton { background-color: #5a3a3a; color: #e0e0e0; font-size: 11px; padding: 6px; border: 1px solid #3e3e42; border-radius: 3px; }
-            QPushButton:hover { background-color: #6a4a4a; }
-            QPushButton:pressed { background-color: #4a2a2a; }
-        """)
-        self.btn_delete_config.setToolTip("Delete selected configuration")
-        self.btn_delete_config.clicked.connect(self._delete_graph_config)
-        config_layout.addWidget(self.btn_delete_config)
-        
-        self.sidebar_layout.addWidget(config_row)
-        
+
         # Analytics window instance (created on demand)
         self.analytics_window = None
 
@@ -4229,6 +4335,98 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    # ── Menu Bar ───────────────────────────────────────────────────────
+    def _create_menu_bar(self):
+        """Create the main menu bar with File, View, Graphs, Tools, Help menus."""
+        mb = self._title_bar.menu_bar
+
+        # ── File ──
+        file_menu = mb.addMenu("File")
+        file_menu.addAction("Export Graph Data to CSV", self._menu_export_csv)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
+
+        # ── View ──
+        view_menu = mb.addMenu("View")
+        self._toggle_sidebar_action = view_menu.addAction("Hide Sidebar", self._menu_toggle_sidebar)
+        view_menu.addAction("Toggle Comm Info", self.toggle_comm_info)
+
+        # ── Graphs ──
+        graphs_menu = mb.addMenu("Graphs")
+        graphs_menu.addAction("New Graph from Selection", self.add_new_graph)
+        graphs_menu.addSeparator()
+        graphs_menu.addAction("Save Graph Config...", self._save_graph_config)
+
+        # Submenu: Load Config
+        self._config_submenu = graphs_menu.addMenu("Load Graph Config")
+        self._rebuild_config_submenu()
+        graphs_menu.addAction("Delete Graph Config...", self._delete_graph_config)
+
+        # ── Tools ──
+        tools_menu = mb.addMenu("Tools")
+        tools_menu.addAction("Open Analytics", self.open_analytics_window)
+        tools_menu.addSeparator()
+        tools_menu.addAction("Reload Variables", self.reload_variables)
+
+        # ── Help ──
+        help_menu = mb.addMenu("Help")
+        help_menu.addAction("About", self._show_about)
+
+    def _menu_toggle_sidebar(self):
+        """Toggle sidebar visibility from the menu bar."""
+        if self.sidebar.isVisible():
+            self.sidebar.hide()
+            self._toggle_sidebar_action.setText("Show Sidebar")
+        else:
+            self.sidebar.show()
+            self._toggle_sidebar_action.setText("Hide Sidebar")
+
+    def _menu_export_csv(self):
+        """Export graph data to CSV. If only one graph exists, export it directly;
+        otherwise let the user pick which graph to export."""
+        if not hasattr(self, 'graphs') or not self.graphs:
+            self._show_toast("No graphs to export.")
+            return
+        if len(self.graphs) == 1:
+            self.graphs[0].export_graph_data_to_csv()
+        else:
+            names = [g.get_display_title() for g in self.graphs]
+            name, ok = QInputDialog.getItem(
+                self, "Export Graph", "Select graph to export:", names, 0, False)
+            if ok and name:
+                idx = names.index(name)
+                self.graphs[idx].export_graph_data_to_csv()
+
+    def _rebuild_config_submenu(self):
+        """Rebuild the 'Load Graph Config' submenu from saved configurations."""
+        self._config_submenu.clear()
+        s = QSettings("ProAutomation", "Studio")
+        configs = s.value("graph_configs", {})
+        if not configs or not isinstance(configs, dict):
+            action = self._config_submenu.addAction("(no saved configs)")
+            action.setEnabled(False)
+            return
+        for name in sorted(configs.keys()):
+            self._config_submenu.addAction(name, lambda n=name: self._load_graph_config_by_name(n))
+
+    def _load_graph_config_by_name(self, name):
+        """Load a specific graph configuration by name (called from the menu submenu).
+        Sets the sidebar combo to the right item and delegates to _load_graph_config."""
+        idx = self.config_load_combo.findData(name)
+        if idx >= 0:
+            self.config_load_combo.setCurrentIndex(idx)
+        self._load_graph_config()
+
+    def _show_about(self):
+        """Show an About dialog for the application."""
+        QMessageBox.about(
+            self,
+            "About Dec ProAutomation Studio",
+            "<b>Dec ProAutomation Studio</b><br><br>"
+            "PLC monitoring, graph visualization &amp; analytics tool.<br><br>"
+            "Built with PySide6 &amp; pyqtgraph."
+        )
+
     def load_variables(self):
         """Load variables from the chosen exchange and recipe CSV files (browsable; any filename)."""
         self.var_list.clear()
@@ -4556,6 +4754,7 @@ class MainWindow(QMainWindow):
         s.setValue("graph_configs", all_configs)
         
         self._refresh_config_list()
+        self._rebuild_config_submenu()
         # Select the just-saved config
         idx = self.config_load_combo.findData(name)
         if idx >= 0:
@@ -4707,6 +4906,7 @@ class MainWindow(QMainWindow):
             s.setValue("graph_configs", all_configs)
         
         self._refresh_config_list()
+        self._rebuild_config_submenu()
         self._show_toast(f"'{name}' deleted.")
 
     def toggle_pause(self):
@@ -4835,6 +5035,51 @@ class MainWindow(QMainWindow):
             x = (self.width() - self._toast_label.width()) // 2
             y = self.height() - self._toast_label.height() - 32
             self._toast_label.move(x, y)
+
+    # ── Frameless window edge-resizing (Windows native hit-test) ────────
+    _BORDER = 8  # pixels from edge that trigger resize
+
+    def nativeEvent(self, eventType, message):
+        """Handle Windows WM_NCHITTEST for edge/corner resize on frameless window."""
+        try:
+            import ctypes
+            import ctypes.wintypes
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0084:  # WM_NCHITTEST
+                x = msg.lParam & 0xFFFF
+                y = (msg.lParam >> 16) & 0xFFFF
+                # Convert signed 16-bit
+                if x >= 0x8000:
+                    x -= 0x10000
+                if y >= 0x8000:
+                    y -= 0x10000
+                geo = self.frameGeometry()
+                b = self._BORDER
+                left = abs(x - geo.left()) <= b
+                right = abs(x - geo.right()) <= b
+                top = abs(y - geo.top()) <= b
+                bottom = abs(y - geo.bottom()) <= b
+                # HTLEFT=10 HTRIGHT=11 HTTOP=12 HTTOPLEFT=13 HTTOPRIGHT=14
+                # HTBOTTOM=15 HTBOTTOMLEFT=16 HTBOTTOMRIGHT=17
+                if top and left:
+                    return True, 13
+                if top and right:
+                    return True, 14
+                if bottom and left:
+                    return True, 16
+                if bottom and right:
+                    return True, 17
+                if left:
+                    return True, 10
+                if right:
+                    return True, 11
+                if top:
+                    return True, 12
+                if bottom:
+                    return True, 15
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
         self._save_last_config()
