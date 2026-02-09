@@ -493,58 +493,7 @@ class AnalyticsWindow(QWidget):
         right_layout.setSpacing(8)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # RSD indicator (compact single line)
-        rsd_val = stats['rsd']
-        rsd_color, rsd_rating = self._get_rsd_color_rating(rsd_val)
-        
-        # Build RSD tooltip with rating guide
-        rsd_tooltip = (
-            f"━━━ %RSD (CV) ━━━\n\n"
-            f"Relative Standard Deviation\n"
-            f"Also called Coefficient of Variation\n\n"
-            f"Formula: %RSD = (σ / µ) × 100\n\n"
-            f"Current: {rsd_val:.2f}%\n"
-            f"Rating: {rsd_rating}\n\n"
-            f"Rating Guide:\n"
-            f"  • < 0.5%: Excellent\n"
-            f"  • < 1%: Very Good\n"
-            f"  • < 2.5%: Medium\n"
-            f"  • < 5%: Poor\n"
-            f"  • ≥ 5%: High Variability"
-        )
-        
-        rsd_frame = QFrame()
-        rsd_frame.setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 3px; }}")
-        rsd_frame.setMaximumHeight(26)
-        rsd_frame.setToolTip(rsd_tooltip)
-        rsd_frame.setCursor(Qt.CursorShape.WhatsThisCursor)
-        rsd_layout = QHBoxLayout(rsd_frame)
-        rsd_layout.setContentsMargins(6, 2, 6, 2)
-        rsd_layout.setSpacing(4)
-        
-        rsd_title = QLabel("%RSD:")
-        rsd_title.setStyleSheet("font-size: 9px; color: #888; border: none;")
-        rsd_title.setToolTip(rsd_tooltip)
-        rsd_layout.addWidget(rsd_title)
-        
-        rsd_display = QLabel(f"{rsd_val:.2f}%")
-        rsd_display.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {rsd_color}; border: none;")
-        rsd_display.setToolTip(rsd_tooltip)
-        rsd_layout.addWidget(rsd_display)
-        panel_refs['rsd_display'] = rsd_display
-        panel_refs['rsd_frame'] = rsd_frame
-        panel_refs['rsd_tooltip'] = rsd_tooltip
-        
-        rsd_rating_lbl = QLabel(f"({rsd_rating})")
-        rsd_rating_lbl.setStyleSheet(f"font-size: 9px; color: {rsd_color}; border: none;")
-        rsd_rating_lbl.setToolTip(rsd_tooltip)
-        rsd_layout.addWidget(rsd_rating_lbl)
-        panel_refs['rsd_rating'] = rsd_rating_lbl
-        
-        rsd_layout.addStretch()
-        right_layout.addWidget(rsd_frame)
-        
-        # Stats with tooltips
+        # Stats with tooltips (RSD is integrated as the first row)
         stats_widget = self._create_stats_with_tooltips(var_name, stats, capability, panel_refs)
         right_layout.addWidget(stats_widget)
         
@@ -721,7 +670,7 @@ class AnalyticsWindow(QWidget):
         return tab
     
     def _create_stats_with_tooltips(self, var_name, stats, capability, panel_refs):
-        """Create statistics widget with detailed tooltips."""
+        """Create statistics widget with detailed tooltips. RSD is shown as the first row."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 5, 0, 0)
@@ -739,14 +688,14 @@ class AnalyticsWindow(QWidget):
             row = QHBoxLayout()
             row.setSpacing(4)
             lbl = QLabel(name)
-            lbl.setStyleSheet("color: #888; font-size: 9px; border: none;")
+            lbl.setStyleSheet("color: #888; font-size: 10px; border: none;")
             lbl.setToolTip(tooltip)
             lbl.setCursor(Qt.CursorShape.WhatsThisCursor)
-            lbl.setFixedWidth(50)
+            lbl.setFixedWidth(55)
             row.addWidget(lbl)
             weight = "bold" if bold else "normal"
             val = QLabel(value)
-            val.setStyleSheet(f"color: {color}; font-size: 9px; font-weight: {weight}; border: none;")
+            val.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: {weight}; border: none;")
             val.setToolTip(tooltip)
             row.addWidget(val)
             row.addStretch()
@@ -867,6 +816,12 @@ class AnalyticsWindow(QWidget):
             f"Range (Max - Min): {stats['max'] - stats['min']:.4f}{unit_str}"
         )
         
+        # RSD as first row (colored by rating)
+        rsd_color, rsd_rating = self._get_rsd_color_rating(stats['rsd'])
+        add_row("%RSD:", f"{stats['rsd']:.2f}%  {rsd_rating}", rsd_tip, 'rsd', color=rsd_color, bold=True)
+        panel_refs['rsd_display'] = panel_refs['stat_rsd']
+        panel_refs['rsd_rating_text'] = rsd_rating
+
         add_row("Count:", str(stats['count']), count_tip, 'count')
         add_row("Mean:", f"{stats['mean']:.4f}", mean_tip, 'mean')
         add_row("Std Dev:", f"{stats['std']:.4f}", std_tip, 'std')
@@ -1055,16 +1010,9 @@ class AnalyticsWindow(QWidget):
         )
         
         if 'rsd_display' in panel_refs:
-            panel_refs['rsd_display'].setText(f"{rsd_val:.2f}%")
-            panel_refs['rsd_display'].setStyleSheet(f"font-size: 11px; font-weight: bold; color: {rsd_color}; border: none;")
+            panel_refs['rsd_display'].setText(f"{rsd_val:.2f}%  {rsd_rating}")
+            panel_refs['rsd_display'].setStyleSheet(f"font-size: 10px; font-weight: bold; color: {rsd_color}; border: none;")
             panel_refs['rsd_display'].setToolTip(rsd_tooltip)
-        if 'rsd_frame' in panel_refs:
-            panel_refs['rsd_frame'].setStyleSheet(f"QFrame {{ background-color: #252526; border: 1px solid {rsd_color}; border-radius: 3px; }}")
-            panel_refs['rsd_frame'].setToolTip(rsd_tooltip)
-        if 'rsd_rating' in panel_refs:
-            panel_refs['rsd_rating'].setText(f"({rsd_rating})")
-            panel_refs['rsd_rating'].setStyleSheet(f"font-size: 9px; color: {rsd_color}; border: none;")
-            panel_refs['rsd_rating'].setToolTip(rsd_tooltip)
         
         # Update stats tooltips
         self._update_stats_tooltips(panel_refs, stats, capability, var_name)
@@ -1214,7 +1162,7 @@ class AnalyticsWindow(QWidget):
         for metric in ['cp', 'cpk', 'cpm']:
             if f'stat_{metric}' in panel_refs:
                 panel_refs[f'stat_{metric}'].setText(f"{capability[metric]:.3f}")
-                panel_refs[f'stat_{metric}'].setStyleSheet(f"color: {get_cap_color(capability[metric])}; font-size: 9px; font-weight: bold; border: none;")
+                panel_refs[f'stat_{metric}'].setStyleSheet(f"color: {get_cap_color(capability[metric])}; font-size: 10px; font-weight: bold; border: none;")
                 panel_refs[f'stat_{metric}'].setToolTip(cap_tooltips[metric])
     
     def _on_setting_changed(self, edit_widget, setting_type, var_name):

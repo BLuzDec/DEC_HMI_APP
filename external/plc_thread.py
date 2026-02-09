@@ -10,7 +10,8 @@ import os
 
 class PLCThread(threading.Thread):
     def __init__(self, ip_address, signal_emitter, status_emitter=None, comm_speed=0.05,
-                 recording_reference="time", recording_interval_sec=0.5, recording_trigger_variable=None):
+                 recording_reference="time", recording_interval_sec=0.5, recording_trigger_variable=None,
+                 db_filename=None):
         super().__init__()
         self.ip_address = ip_address
         self.signal_emitter = signal_emitter
@@ -56,6 +57,8 @@ class PLCThread(threading.Thread):
         self.external_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(self.external_dir)
         # Daily DB files: each day gets its own .duckdb file for crash safety and history
+        # db_filename: base name without extension, e.g. "Data_09022026". If None, auto-generated.
+        self._db_filename_base = db_filename  # None = use default Data_DDMMYYYY
         self._current_db_date = None
         self.db_path = None  # Set in init_duckdb() to today's file
         
@@ -81,10 +84,17 @@ class PLCThread(threading.Thread):
                 self.take_specific_nodes[key] = value
 
     @staticmethod
-    def get_db_path_for_date(external_dir, dt):
-        """Get the .duckdb file path for a given date."""
-        date_str = dt.strftime("%Y-%m-%d")
-        return os.path.join(external_dir, f'recording_{date_str}.duckdb')
+    def default_db_filename_for_date(dt):
+        """Return the default base filename for a date, e.g. 'Data_09022026'."""
+        return f"Data_{dt.strftime('%d%m%Y')}"
+
+    def get_db_path_for_date(self, dt):
+        """Get the .duckdb file path for a given date, using custom or default filename."""
+        if self._db_filename_base:
+            fname = self._db_filename_base
+        else:
+            fname = self.default_db_filename_for_date(dt)
+        return os.path.join(self.external_dir, f'{fname}.duckdb')
 
     def _create_tables(self):
         """Create recording tables if they don't exist."""
@@ -106,12 +116,13 @@ class PLCThread(threading.Thread):
         ''')
 
     def init_duckdb(self):
-        """Open today's daily database file (.duckdb). Each day gets its own file."""
+        """Open today's daily database file (.duckdb). Each day gets its own file.
+        If the file already exists (e.g. app restarted same day) it appends to it."""
         today = datetime.date.today()
         self._current_db_date = today
-        self.db_path = self.get_db_path_for_date(self.external_dir, today)
+        self.db_path = self.get_db_path_for_date(today)
         self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
-        self._create_tables()
+        self._create_tables()  # CREATE TABLE IF NOT EXISTS — safe to call on existing file
         logging.info(f"DuckDB opened: {self.db_path}")
 
     def _check_day_rollover(self):
@@ -126,7 +137,9 @@ class PLCThread(threading.Thread):
                 except Exception as e:
                     logging.warning(f"Error closing DB on day rollover: {e}")
             self._current_db_date = today
-            self.db_path = self.get_db_path_for_date(self.external_dir, today)
+            # On rollover, generate new default filename for the new day
+            self._db_filename_base = self.default_db_filename_for_date(today)
+            self.db_path = self.get_db_path_for_date(today)
             self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
             self._create_tables()
             logging.info(f"DuckDB day rollover complete: {self.db_path}")

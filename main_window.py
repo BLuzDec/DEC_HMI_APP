@@ -5,6 +5,11 @@ import logging
 
 import duckdb
 from datetime import datetime, timedelta
+try:
+    import psutil
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
 from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QListWidget, QPushButton, QSplitter, QScrollArea,
                                QAbstractItemView, QLabel, QApplication, QFrame,
@@ -754,9 +759,30 @@ def recording_has_data(db_path):
         return False
 
 
+def _format_size(size_bytes):
+    """Human-readable file size."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def get_process_ram_mb():
+    """Return current process RSS (resident set size) in MB, or None if psutil unavailable."""
+    if _HAS_PSUTIL:
+        try:
+            proc = psutil.Process(os.getpid())
+            return proc.memory_info().rss / (1024 * 1024)
+        except Exception:
+            return None
+    return None
+
+
 def list_recording_db_files(external_dir):
     """
-    List all recording_*.duckdb files in external_dir.
+    List all Data_DDMMYYYY.duckdb (and legacy recording_YYYY-MM-DD.duckdb) files in external_dir.
     Returns list of dicts: [{ 'path': str, 'date_str': str, 'date': date, 'size_bytes': int, 'size_label': str }]
     sorted by date descending (newest first).
     """
@@ -764,47 +790,46 @@ def list_recording_db_files(external_dir):
     results = []
     if not external_dir or not os.path.isdir(external_dir):
         return results
-    pattern = re.compile(r'^recording_(\d{4}-\d{2}-\d{2})\.duckdb$')
+    # New format: Data_DDMMYYYY.duckdb  (e.g. Data_09022026.duckdb)
+    pat_new = re.compile(r'^Data_(\d{2})(\d{2})(\d{4})\.duckdb$')
+    # Old format: recording_YYYY-MM-DD.duckdb
+    pat_old = re.compile(r'^recording_(\d{4}-\d{2}-\d{2})\.duckdb$')
     for fname in os.listdir(external_dir):
-        m = pattern.match(fname)
-        if m:
-            date_str = m.group(1)
+        file_date = None
+        m_new = pat_new.match(fname)
+        m_old = pat_old.match(fname) if not m_new else None
+        if m_new:
+            day, month, year = m_new.group(1), m_new.group(2), m_new.group(3)
             try:
-                file_date = _dt.date.fromisoformat(date_str)
+                file_date = _dt.date(int(year), int(month), int(day))
             except ValueError:
                 continue
+        elif m_old:
+            try:
+                file_date = _dt.date.fromisoformat(m_old.group(1))
+            except ValueError:
+                continue
+        if file_date is not None:
             fpath = os.path.join(external_dir, fname)
             size_bytes = os.path.getsize(fpath)
-            if size_bytes < 1024:
-                size_label = f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                size_label = f"{size_bytes / 1024:.1f} KB"
-            else:
-                size_label = f"{size_bytes / (1024 * 1024):.1f} MB"
             results.append({
                 'path': fpath,
-                'date_str': date_str,
+                'date_str': file_date.strftime("%d/%m/%Y"),
                 'date': file_date,
                 'size_bytes': size_bytes,
-                'size_label': size_label,
+                'size_label': _format_size(size_bytes),
             })
     # Also check for legacy automation_data.db
     legacy_path = os.path.join(external_dir, 'automation_data.db')
     if os.path.isfile(legacy_path):
         size_bytes = os.path.getsize(legacy_path)
         if size_bytes > 4096:  # Only show if it has meaningful data
-            if size_bytes < 1024:
-                size_label = f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                size_label = f"{size_bytes / 1024:.1f} KB"
-            else:
-                size_label = f"{size_bytes / (1024 * 1024):.1f} MB"
             results.append({
                 'path': legacy_path,
                 'date_str': 'legacy',
                 'date': _dt.date.min,
                 'size_bytes': size_bytes,
-                'size_label': size_label,
+                'size_label': _format_size(size_bytes),
             })
     results.sort(key=lambda x: x['date'], reverse=True)
     return results
@@ -1749,7 +1774,7 @@ class DynamicPlotWidget(QWidget):
                     
                     f.write(";".join(row) + "\n")
             
-            QMessageBox.information(self, "Export successful", f"Data exported to:\n{path}")
+            self._show_toast(f"Exported to {os.path.basename(path)}")
         except Exception as e:
             logging.warning(f"Export CSV failed: {e}")
             QMessageBox.warning(self, "Export failed", str(e))
@@ -2479,6 +2504,27 @@ class MainWindow(QMainWindow):
         recipe_row.addWidget(self.reload_vars_btn)
         connection_details_layout.addLayout(recipe_row)
 
+        # DB File Name (editable, default Data_DDMMYYYY)
+        db_name_row = QHBoxLayout()
+        db_name_row.setSpacing(4)
+        db_name_label = QLabel("DB File Name:")
+        db_name_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        db_name_label.setFixedWidth(80)
+        db_name_row.addWidget(db_name_label)
+        self.db_filename_edit = QLineEdit()
+        self.db_filename_edit.setStyleSheet("background-color: #333; color: #ccc; border: 1px solid #555; padding: 4px; font-size: 10px;")
+        self.db_filename_edit.setToolTip(
+            "Base name of the daily recording database (.duckdb extension added automatically).\n"
+            "Default: Data_DDMMYYYY (e.g. Data_09022026 for February 9, 2026).\n"
+            "This field updates automatically each day; you can customise it before connecting."
+        )
+        self._set_default_db_filename()
+        db_name_row.addWidget(self.db_filename_edit)
+        db_ext_label = QLabel(".duckdb")
+        db_ext_label.setStyleSheet("color: #888; font-size: 10px;")
+        db_name_row.addWidget(db_ext_label)
+        connection_details_layout.addLayout(db_name_row)
+
         # Line below Variable files (no frame)
         vars_sep = QFrame()
         vars_sep.setFrameShape(QFrame.Shape.HLine)
@@ -2937,6 +2983,32 @@ class MainWindow(QMainWindow):
         self._update_variable_path_display()
         self._load_last_config()
 
+        # Subtle RAM usage indicator (bottom-left, almost hidden)
+        self.ram_label = QLabel("", self)
+        self.ram_label.setStyleSheet(
+            "color: #555; font-size: 9px; background: transparent; padding: 2px 6px;"
+        )
+        self.ram_label.setToolTip("Current application RAM usage (resident set size)")
+        self.ram_label.move(6, self.height() - 18)
+        self.ram_label.raise_()
+        self._update_ram_label()
+
+        # Toast notification label (auto-dismiss, non-blocking)
+        self._toast_label = QLabel("", self)
+        self._toast_label.setStyleSheet(
+            "background-color: rgba(30, 30, 30, 220); color: #ddd; font-size: 11px;"
+            "padding: 8px 16px; border-radius: 6px; border: 1px solid #555;"
+        )
+        self._toast_label.setWordWrap(True)
+        self._toast_label.setMaximumWidth(420)
+        self._toast_label.hide()
+        self._toast_timer = QTimer()
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._toast_label.hide)
+        self.ram_timer = QTimer()
+        self.ram_timer.timeout.connect(self._update_ram_label)
+        self.ram_timer.start(5000)  # Update every 5 seconds
+
     def _load_last_config(self):
         """Restore last saved connection config (device type, IPs, variable paths) from cache."""
         s = QSettings("ProAutomation", "Studio")
@@ -2989,6 +3061,13 @@ class MainWindow(QMainWindow):
         s.setValue("speed", self.speed_input.text().strip())
         s.sync()
 
+    def _set_default_db_filename(self):
+        """Set the DB filename field to today's default: Data_DDMMYYYY."""
+        from external.plc_thread import PLCThread
+        import datetime as _dt
+        default_name = PLCThread.default_db_filename_for_date(_dt.date.today())
+        self.db_filename_edit.setText(default_name)
+
     def _update_variable_path_display(self):
         """Refresh the exchange/recipe CSV path display (basename or full path)."""
         self.exchange_path_edit.setText(self.exchange_variables_path or "")
@@ -3021,14 +3100,10 @@ class MainWindow(QMainWindow):
     def reload_variables(self):
         """Reload exchange and recipe CSVs from current paths (e.g. after editing files). Disconnect first."""
         if self.comm_status.get("connected"):
-            QMessageBox.information(
-                self,
-                "Disconnect first",
-                "Disconnect from PLC/ADS/Simulation before reloading variable files, then click Reload again.",
-            )
+            self._show_toast("Disconnect first, then click Reload again.")
             return
         self.load_variables()
-        QMessageBox.information(self, "Variables reloaded", "Exchange and recipe variable lists have been reloaded from the current CSV paths.")
+        self._show_toast("Variables reloaded from CSV files.")
 
     def _create_offline_csv_info_widget(self):
         """Create the info widget shown when Offline Data: CSV format rules and example table."""
@@ -3250,16 +3325,16 @@ class MainWindow(QMainWindow):
         self.recording_trigger_row_widget.setVisible(ref == "variable")
 
     def _refresh_offline_history(self):
-        """Scan external/ for recording_*.duckdb files and populate the history list with sizes."""
+        """Scan external/ for Data_DDMMYYYY.duckdb files and populate the history list with sizes."""
         self.offline_history_list.clear()
         ext_dir = os.path.join(os.path.dirname(__file__), "external")
         self._offline_db_files = list_recording_db_files(ext_dir)
         import datetime as _dt
-        today_str = _dt.date.today().isoformat()
+        today = _dt.date.today()
         total_bytes = 0
         for entry in self._offline_db_files:
             day_label = entry['date_str']
-            if day_label == today_str:
+            if entry['date'] == today:
                 day_label += "  (today)"
             elif day_label == 'legacy':
                 day_label = "legacy (automation_data.db)"
@@ -3268,12 +3343,7 @@ class MainWindow(QMainWindow):
             total_bytes += entry['size_bytes']
         # Update total history size label
         n_files = len(self._offline_db_files)
-        if total_bytes < 1024:
-            total_label = f"{total_bytes} B"
-        elif total_bytes < 1024 * 1024:
-            total_label = f"{total_bytes / 1024:.1f} KB"
-        else:
-            total_label = f"{total_bytes / (1024 * 1024):.1f} MB"
+        total_label = _format_size(total_bytes)
         if n_files > 0:
             self.offline_memory_label.setText(f"History: {total_label} total ({n_files} file{'s' if n_files != 1 else ''})")
         else:
@@ -3283,13 +3353,7 @@ class MainWindow(QMainWindow):
         """Update the offline memory label with loaded file info + total history size."""
         # Loaded file info
         if loaded_file_bytes > 0:
-            if loaded_file_bytes < 1024:
-                loaded_sz = f"{loaded_file_bytes} B"
-            elif loaded_file_bytes < 1024 * 1024:
-                loaded_sz = f"{loaded_file_bytes / 1024:.1f} KB"
-            else:
-                loaded_sz = f"{loaded_file_bytes / (1024 * 1024):.1f} MB"
-            loaded_text = f"Loaded: {loaded_sz} on disk, {loaded_row_count:,} rows in RAM"
+            loaded_text = f"Loaded: {_format_size(loaded_file_bytes)} on disk, {loaded_row_count:,} rows in RAM"
         else:
             loaded_text = ""
 
@@ -3298,13 +3362,7 @@ class MainWindow(QMainWindow):
         db_files = list_recording_db_files(ext_dir)
         total_bytes = sum(e['size_bytes'] for e in db_files)
         n_files = len(db_files)
-        if total_bytes < 1024:
-            total_label = f"{total_bytes} B"
-        elif total_bytes < 1024 * 1024:
-            total_label = f"{total_bytes / 1024:.1f} KB"
-        else:
-            total_label = f"{total_bytes / (1024 * 1024):.1f} MB"
-        history_text = f"History: {total_label} ({n_files} file{'s' if n_files != 1 else ''})" if n_files > 0 else ""
+        history_text = f"History: {_format_size(total_bytes)} ({n_files} file{'s' if n_files != 1 else ''})" if n_files > 0 else ""
 
         parts = [p for p in [loaded_text, history_text] if p]
         self.offline_memory_label.setText("\n".join(parts) if parts else "")
@@ -3312,11 +3370,11 @@ class MainWindow(QMainWindow):
     def _load_selected_history_day(self, item=None):
         """Load the selected recording day from the history list."""
         if not hasattr(self, '_offline_db_files') or not self._offline_db_files:
-            QMessageBox.information(self, "No files", "No recording history files found.")
+            self._show_toast("No recording history files found.")
             return
         idx = self.offline_history_list.currentRow()
         if idx < 0:
-            QMessageBox.information(self, "Select a day", "Select a recording day from the list first.")
+            self._show_toast("Select a recording day from the list first.")
             return
         if idx >= len(self._offline_db_files):
             return
@@ -3359,11 +3417,45 @@ class MainWindow(QMainWindow):
                 self.offline_db = None
                 return
 
-            # Get time range
+            # Get time range and row count (total rows, not unique timestamps)
             t_row = self.offline_db.execute(
                 "SELECT min(timestamp), max(timestamp), count(*) FROM exchange_variables"
             ).fetchone()
             t_min, t_max, row_count = t_row if t_row else (None, None, 0)
+
+            # Estimate unique timestamps (pivot rows) and RAM
+            n_vars = len(var_names)
+            try:
+                ts_count = self.offline_db.execute(
+                    "SELECT count(DISTINCT timestamp) FROM exchange_variables"
+                ).fetchone()[0]
+            except Exception:
+                ts_count = row_count // max(n_vars, 1)
+            # RAM estimate: pivot table = ts_count rows x (1 timestamp + n_vars doubles)
+            # ~8 bytes per double + 8 bytes per timestamp + DuckDB overhead (~2x)
+            estimated_ram_bytes = ts_count * (8 + n_vars * 8) * 2
+            estimated_ram_mb = estimated_ram_bytes / (1024 * 1024)
+            current_ram = get_process_ram_mb() or 0
+
+            # Show confirmation with RAM estimate
+            disk_sz = _format_size(os.path.getsize(db_path))
+            time_str = ""
+            if t_min and t_max:
+                time_str = f"\nTime range: {t_min.strftime('%H:%M:%S')} → {t_max.strftime('%H:%M:%S')}"
+            reply = QMessageBox.question(
+                self,
+                "Load recording?",
+                f"{os.path.basename(db_path)}  ({disk_sz} on disk)\n"
+                f"{n_vars} variables, {ts_count:,} time points{time_str}\n\n"
+                f"Estimated RAM for pivot table: ~{estimated_ram_mb:.0f} MB\n"
+                f"Current app RAM: {current_ram:.0f} MB → ~{current_ram + estimated_ram_mb:.0f} MB after load",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                self.offline_db.close()
+                self.offline_db = None
+                return
 
             # Pivot: create an offline_data table in memory from the recording
             # Close the read-only connection and create a memory DB that queries the file
@@ -3409,12 +3501,8 @@ class MainWindow(QMainWindow):
             # Update memory label with loaded file info + history total
             self._update_offline_memory_label(disk_size, row_count)
 
-            QMessageBox.information(
-                self, "Recording loaded",
-                f"Loaded {fname}\n"
-                f"{len(var_names)} variables, {row_count:,} rows\n"
-                f"Disk: {sz}{time_info}"
-            )
+            self._update_ram_label()  # Refresh RAM indicator after load
+            self._show_toast(f"Loaded {fname} — {len(var_names)} vars, {row_count:,} rows", 4000)
         except Exception as e:
             logging.error(f"Failed to load DuckDB recording: {e}")
             QMessageBox.warning(
@@ -3439,6 +3527,26 @@ class MainWindow(QMainWindow):
         if not path:
             return
         path = os.path.normpath(path)
+
+        # Show RAM estimate before loading (CSV in-memory ≈ 1.5-3x file size)
+        try:
+            file_size = os.path.getsize(path)
+            estimated_ram_mb = (file_size * 2) / (1024 * 1024)  # ~2x file size in RAM
+            current_ram = get_process_ram_mb() or 0
+            reply = QMessageBox.question(
+                self,
+                "Load CSV?",
+                f"{os.path.basename(path)}  ({_format_size(file_size)} on disk)\n\n"
+                f"Estimated RAM: ~{estimated_ram_mb:.0f} MB\n"
+                f"Current app RAM: {current_ram:.0f} MB → ~{current_ram + estimated_ram_mb:.0f} MB after load",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                return
+        except Exception:
+            pass  # If estimation fails, proceed anyway
+
         try:
             if self.offline_db:
                 try:
@@ -3468,10 +3576,8 @@ class MainWindow(QMainWindow):
             csv_size = os.path.getsize(path) if os.path.isfile(path) else 0
             row_count = self.offline_db.execute("SELECT count(*) FROM offline_data").fetchone()[0]
             self._update_offline_memory_label(csv_size, row_count)
-            QMessageBox.information(
-                self, "CSV loaded",
-                f"Loaded {path} into DuckDB.\n{len(self.offline_columns)} columns available for plotting."
-            )
+            self._update_ram_label()  # Refresh RAM indicator after load
+            self._show_toast(f"Loaded {os.path.basename(path)} — {len(self.offline_columns)} columns", 4000)
         except Exception as e:
             logging.error(f"Failed to load CSV into DuckDB: {e}")
             QMessageBox.warning(
@@ -3606,11 +3712,13 @@ class MainWindow(QMainWindow):
         else:
             self.simulator_thread = None
             self.ads_thread = None
+            db_filename = self.db_filename_edit.text().strip() or None
             self.plc_thread = PLCThread(
                 address, self.data_signal, self.status_signal, comm_speed,
                 recording_reference=recording_reference,
                 recording_interval_sec=recording_interval_sec,
                 recording_trigger_variable=recording_trigger_variable,
+                db_filename=db_filename,
             )
             self.plc_thread.start()
         
@@ -3624,6 +3732,7 @@ class MainWindow(QMainWindow):
         self.browse_exchange_btn.setEnabled(False)
         self.browse_recipe_btn.setEnabled(False)
         self.reload_vars_btn.setEnabled(False)
+        self.db_filename_edit.setEnabled(False)
         # Speed can be changed while connected, buffer size only applies to new graphs
         self.speed_input.setEnabled(True)
         self.trigger_btn.setEnabled(True)  # Enable trigger when connected
@@ -3682,9 +3791,10 @@ class MainWindow(QMainWindow):
             self.browse_exchange_btn.setEnabled(True)
             self.browse_recipe_btn.setEnabled(True)
             self.reload_vars_btn.setEnabled(True)
+            self.db_filename_edit.setEnabled(True)
             self.trigger_btn.setEnabled(False)
             self.pause_btn.setEnabled(False)
-            QMessageBox.information(self, "Not Connected", "No active PLC, ADS, or simulation to disconnect.")
+            self._show_toast("No active connection to disconnect.")
             return
         
         # Common cleanup: clear graph buffers, update status, button states
@@ -3718,6 +3828,8 @@ class MainWindow(QMainWindow):
         self.browse_exchange_btn.setEnabled(True)
         self.browse_recipe_btn.setEnabled(True)
         self.reload_vars_btn.setEnabled(True)
+        self.db_filename_edit.setEnabled(True)
+        self._set_default_db_filename()  # Reset to today's default on disconnect
         self.trigger_btn.setEnabled(False)
         self.pause_btn.setEnabled(False)
         self.trigger_active = False
@@ -3819,6 +3931,8 @@ class MainWindow(QMainWindow):
             self.browse_exchange_btn.setEnabled(True)
             self.browse_recipe_btn.setEnabled(True)
             self.reload_vars_btn.setEnabled(True)
+            self.db_filename_edit.setEnabled(True)
+            self._set_default_db_filename()
             self.trigger_btn.setEnabled(False)
             self.pause_btn.setEnabled(False)
             # Reset trigger and pause state when disconnected
@@ -3854,6 +3968,7 @@ class MainWindow(QMainWindow):
                 self.browse_exchange_btn.setEnabled(True)
                 self.browse_recipe_btn.setEnabled(True)
                 self.reload_vars_btn.setEnabled(True)
+                self.db_filename_edit.setEnabled(True)
         elif status_type == "stats":
             if "read_count" in details:
                 self.comm_status["read_count"] = details["read_count"]
@@ -3953,13 +4068,7 @@ class MainWindow(QMainWindow):
         if db_path and os.path.isfile(db_path):
             try:
                 sz = os.path.getsize(db_path)
-                if sz < 1024:
-                    db_label = f"DB: {sz} B"
-                elif sz < 1024 * 1024:
-                    db_label = f"DB: {sz / 1024:.1f} KB"
-                else:
-                    db_label = f"DB: {sz / (1024 * 1024):.1f} MB"
-                self.comm_db_size_label.setText(f"{db_label}  ({os.path.basename(db_path)})")
+                self.comm_db_size_label.setText(f"DB: {_format_size(sz)}  ({os.path.basename(db_path)})")
             except Exception:
                 self.comm_db_size_label.setText("DB: --")
         else:
@@ -4382,11 +4491,7 @@ class MainWindow(QMainWindow):
     def open_analytics_window(self):
         """Open the Analytics window showing real-time statistics for all graphs."""
         if not self.graphs:
-            QMessageBox.information(
-                self,
-                "No Graphs",
-                "Please create at least one graph first, then open Analytics to view statistics."
-            )
+            self._show_toast("Create at least one graph first to open Analytics.")
             return
         
         # Create or show existing analytics window
@@ -4413,7 +4518,7 @@ class MainWindow(QMainWindow):
     def _save_graph_config(self):
         """Save current graph configuration with a user-provided name."""
         if not self.graphs:
-            QMessageBox.information(self, "No Graphs", "Please create at least one graph to save.")
+            self._show_toast("Create at least one graph first to save.")
             return
         
         # Ask for config name
@@ -4456,13 +4561,13 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.config_load_combo.setCurrentIndex(idx)
         
-        QMessageBox.information(self, "Saved", f"Configuration '{name}' saved with {len(graph_configs)} graph(s).")
+        self._show_toast(f"'{name}' saved — {len(graph_configs)} graph(s).")
 
     def _load_graph_config(self):
         """Load a saved graph configuration."""
         name = self.config_load_combo.currentData()
         if not name:
-            QMessageBox.information(self, "No Selection", "Please select a configuration to load.")
+            self._show_toast("Select a configuration to load.")
             return
         
         s = QSettings("ProAutomation", "Studio")
@@ -4576,7 +4681,7 @@ class MainWindow(QMainWindow):
             loaded_count += 1
         
         if loaded_count > 0:
-            QMessageBox.information(self, "Loaded", f"Loaded {loaded_count} graph(s) from '{name}'.")
+            self._show_toast(f"Loaded {loaded_count} graph(s) from '{name}'.")
         else:
             QMessageBox.warning(self, "Load Failed", "No graphs could be loaded (missing variables?).")
 
@@ -4584,7 +4689,7 @@ class MainWindow(QMainWindow):
         """Delete a saved graph configuration."""
         name = self.config_load_combo.currentData()
         if not name:
-            QMessageBox.information(self, "No Selection", "Please select a configuration to delete.")
+            self._show_toast("Select a configuration to delete.")
             return
         
         reply = QMessageBox.question(
@@ -4602,7 +4707,7 @@ class MainWindow(QMainWindow):
             s.setValue("graph_configs", all_configs)
         
         self._refresh_config_list()
-        QMessageBox.information(self, "Deleted", f"Configuration '{name}' deleted.")
+        self._show_toast(f"'{name}' deleted.")
 
     def toggle_pause(self):
         """Toggle pause: freeze current values so user can zoom, pan, or export without new data updating the graphs."""
@@ -4700,6 +4805,37 @@ class MainWindow(QMainWindow):
                 QPushButton:pressed { background-color: #cc5500; }
             """)
 
+    def _update_ram_label(self):
+        """Update the subtle RAM usage label at the bottom-left."""
+        ram_mb = get_process_ram_mb()
+        if ram_mb is not None:
+            self.ram_label.setText(f"RAM: {ram_mb:.0f} MB")
+        else:
+            self.ram_label.setText("")
+        self.ram_label.adjustSize()
+
+    def _show_toast(self, message, duration_ms=3000):
+        """Show a brief non-blocking toast notification at the bottom-center of the window."""
+        self._toast_label.setText(message)
+        self._toast_label.adjustSize()
+        # Position: bottom-center, above the RAM label
+        x = (self.width() - self._toast_label.width()) // 2
+        y = self.height() - self._toast_label.height() - 32
+        self._toast_label.move(x, y)
+        self._toast_label.raise_()
+        self._toast_label.show()
+        self._toast_timer.start(duration_ms)
+
+    def resizeEvent(self, event):
+        """Keep RAM label and toast anchored on window resize."""
+        super().resizeEvent(event)
+        if hasattr(self, 'ram_label'):
+            self.ram_label.move(6, self.height() - 22)
+        if hasattr(self, '_toast_label') and self._toast_label.isVisible():
+            x = (self.width() - self._toast_label.width()) // 2
+            y = self.height() - self._toast_label.height() - 32
+            self._toast_label.move(x, y)
+
     def closeEvent(self, event):
         self._save_last_config()
         # Close analytics window if open
@@ -4745,9 +4881,7 @@ class MainWindow(QMainWindow):
                     if path:
                         try:
                             n = export_recording_to_csv(db_path, from_dt, to_dt, interval_sec, path)
-                            QMessageBox.information(
-                                self, "Export done", f"Exported {n} rows to {path}"
-                            )
+                            logging.info(f"Exported {n} rows to {path}")
                         except Exception as e:
                             logging.exception("Export recording failed")
                             QMessageBox.warning(
