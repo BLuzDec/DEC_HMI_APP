@@ -739,21 +739,6 @@ def get_recording_time_range(db_path):
         return None, None
 
 
-def truncate_recording_db(db_path):
-    """Delete all rows from exchange_variables and exchange_recipes."""
-    if not db_path or not os.path.isfile(db_path):
-        return
-    try:
-        conn = duckdb.connect(database=db_path, read_only=False)
-        try:
-            conn.execute("DELETE FROM exchange_variables")
-            conn.execute("DELETE FROM exchange_recipes")
-        finally:
-            conn.close()
-    except Exception as e:
-        logging.warning("Truncate recording DB failed: %s", e)
-
-
 def recording_has_data(db_path):
     """Return True if exchange_variables has at least one row."""
     if not db_path or not os.path.isfile(db_path):
@@ -767,6 +752,103 @@ def recording_has_data(db_path):
             conn.close()
     except Exception:
         return False
+
+
+def list_recording_db_files(external_dir):
+    """
+    List all recording_*.duckdb files in external_dir.
+    Returns list of dicts: [{ 'path': str, 'date_str': str, 'date': date, 'size_bytes': int, 'size_label': str }]
+    sorted by date descending (newest first).
+    """
+    import re, datetime as _dt
+    results = []
+    if not external_dir or not os.path.isdir(external_dir):
+        return results
+    pattern = re.compile(r'^recording_(\d{4}-\d{2}-\d{2})\.duckdb$')
+    for fname in os.listdir(external_dir):
+        m = pattern.match(fname)
+        if m:
+            date_str = m.group(1)
+            try:
+                file_date = _dt.date.fromisoformat(date_str)
+            except ValueError:
+                continue
+            fpath = os.path.join(external_dir, fname)
+            size_bytes = os.path.getsize(fpath)
+            if size_bytes < 1024:
+                size_label = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_label = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_label = f"{size_bytes / (1024 * 1024):.1f} MB"
+            results.append({
+                'path': fpath,
+                'date_str': date_str,
+                'date': file_date,
+                'size_bytes': size_bytes,
+                'size_label': size_label,
+            })
+    # Also check for legacy automation_data.db
+    legacy_path = os.path.join(external_dir, 'automation_data.db')
+    if os.path.isfile(legacy_path):
+        size_bytes = os.path.getsize(legacy_path)
+        if size_bytes > 4096:  # Only show if it has meaningful data
+            if size_bytes < 1024:
+                size_label = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_label = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_label = f"{size_bytes / (1024 * 1024):.1f} MB"
+            results.append({
+                'path': legacy_path,
+                'date_str': 'legacy',
+                'date': _dt.date.min,
+                'size_bytes': size_bytes,
+                'size_label': size_label,
+            })
+    results.sort(key=lambda x: x['date'], reverse=True)
+    return results
+
+
+def get_db_memory_info(db_path):
+    """
+    Get memory usage info for a DuckDB file.
+    Returns dict: { 'ram_bytes': int, 'ram_label': str, 'disk_bytes': int, 'disk_label': str, 'row_count': int }
+    """
+    info = {'ram_bytes': 0, 'ram_label': '0 B', 'disk_bytes': 0, 'disk_label': '0 B', 'row_count': 0}
+    if not db_path or not os.path.isfile(db_path):
+        return info
+    try:
+        info['disk_bytes'] = os.path.getsize(db_path)
+        size = info['disk_bytes']
+        if size < 1024:
+            info['disk_label'] = f"{size} B"
+        elif size < 1024 * 1024:
+            info['disk_label'] = f"{size / 1024:.1f} KB"
+        else:
+            info['disk_label'] = f"{size / (1024 * 1024):.1f} MB"
+    except Exception:
+        pass
+    try:
+        conn = duckdb.connect(database=db_path, read_only=True)
+        try:
+            # Get row count
+            row = conn.execute("SELECT count(*) FROM exchange_variables").fetchone()
+            info['row_count'] = row[0] if row else 0
+            # Get memory usage via pragma
+            try:
+                mem_row = conn.execute("CALL pragma_database_size()").fetchone()
+                if mem_row:
+                    # pragma_database_size returns: database_name, database_size, block_size, total_blocks, used_blocks, free_blocks, wal_size, memory_usage, memory_limit
+                    # Index depends on version; try to get memory_usage
+                    pass  # DuckDB read_only doesn't track RAM well; we'll use disk size
+            except Exception:
+                pass
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return info
 
 
 class DynamicPlotWidget(QWidget):
@@ -1189,12 +1271,12 @@ class DynamicPlotWidget(QWidget):
     def update_time_display(self):
         """Update the time display label with current day number and hour"""
         now = datetime.now()
-        day_of_year = now.timetuple().tm_yday
         hour = now.hour
-        # Show day number and hour, update if hour changes
+        # Show date and time
         if hour != self.start_hour:
             self.start_hour = hour
-        self.time_display_label.setText(f"Day {day_of_year} | Hour {hour:02d}:{now.minute:02d}:{now.second:02d}")
+        date_str = now.strftime("%B %d").replace(" 0", " ")  # e.g. "February 9"
+        self.time_display_label.setText(f"{date_str} | Hour {hour:02d}:{now.minute:02d}:{now.second:02d}")
     
     def format_time_from_index(self, index):
         """Convert index to time string showing only minutes, seconds, and milliseconds (MM:SS.mmm)
@@ -2617,32 +2699,92 @@ class MainWindow(QMainWindow):
         online_layout.addWidget(self.trigger_frame)
         self.sidebar_layout.addWidget(self.online_panel)
 
-        # Offline panel: Load CSV → DuckDB + CSV format info (shown when Offline Data)
+        # Offline panel: Load CSV or Recording DB + history (shown when Offline Data)
         self.offline_panel = QWidget()
-        offline_main = QHBoxLayout(self.offline_panel)
+        offline_main = QVBoxLayout(self.offline_panel)
         offline_main.setContentsMargins(0, 5, 0, 0)
-        offline_main.setSpacing(8)
-        # Left: Load button and path
-        offline_left = QVBoxLayout()
-        offline_left.setSpacing(4)
-        self.offline_load_btn = QPushButton("Load CSV → DuckDB")
-        self.offline_load_btn.setCursor(Qt.PointingHandCursor)
-        self.offline_load_btn.setStyleSheet("""
-            QPushButton { background-color: #1a6fa5; color: white; font-weight: bold; padding: 8px; border: none; border-radius: 3px; }
+        offline_main.setSpacing(6)
+
+        # Row 1: Load buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self.offline_load_csv_btn = QPushButton("Load CSV")
+        self.offline_load_csv_btn.setCursor(Qt.PointingHandCursor)
+        self.offline_load_csv_btn.setStyleSheet("""
+            QPushButton { background-color: #1a6fa5; color: white; font-weight: bold; padding: 7px 12px; border: none; border-radius: 3px; font-size: 11px; }
             QPushButton:hover { background-color: #2580b8; }
             QPushButton:pressed { background-color: #0d5a8a; }
         """)
-        self.offline_load_btn.setToolTip("Load a CSV file into DuckDB for fast querying and plotting. Use for large files or many parameters instead of reading CSV repeatedly.")
-        self.offline_load_btn.clicked.connect(self.load_offline_csv)
-        offline_left.addWidget(self.offline_load_btn)
+        self.offline_load_csv_btn.setToolTip("Load a CSV file into memory for plotting")
+        self.offline_load_csv_btn.clicked.connect(self.load_offline_csv)
+        btn_row.addWidget(self.offline_load_csv_btn)
+
+        self.offline_load_db_btn = QPushButton("Load Recording DB")
+        self.offline_load_db_btn.setCursor(Qt.PointingHandCursor)
+        self.offline_load_db_btn.setStyleSheet("""
+            QPushButton { background-color: #5a3a8a; color: white; font-weight: bold; padding: 7px 12px; border: none; border-radius: 3px; font-size: 11px; }
+            QPushButton:hover { background-color: #6a4a9a; }
+            QPushButton:pressed { background-color: #4a2a7a; }
+        """)
+        self.offline_load_db_btn.setToolTip("Browse a .duckdb recording file to load for plotting")
+        self.offline_load_db_btn.clicked.connect(self.load_offline_duckdb_file)
+        btn_row.addWidget(self.offline_load_db_btn)
+        offline_main.addLayout(btn_row)
+
+        # Row 2: Recording history (available daily .duckdb files)
+        history_frame = QFrame()
+        history_frame.setStyleSheet("""
+            QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; }
+        """)
+        history_layout = QVBoxLayout(history_frame)
+        history_layout.setContentsMargins(6, 6, 6, 6)
+        history_layout.setSpacing(4)
+        history_title = QLabel("Recording History (.duckdb)")
+        history_title.setStyleSheet("font-weight: bold; color: #aaa; font-size: 10px; border: none;")
+        history_layout.addWidget(history_title)
+        self.offline_history_list = QListWidget()
+        self.offline_history_list.setMaximumHeight(120)
+        self.offline_history_list.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 3px; color: #ccc; font-size: 10px; outline: 0; }
+            QListWidget::item { padding: 4px 6px; border-bottom: 1px solid #333; }
+            QListWidget::item:selected { background-color: #094771; color: white; }
+            QListWidget::item:hover { background-color: #3e3e42; }
+        """)
+        self.offline_history_list.setToolTip("Double-click a day to load it, or select and click 'Load Selected Day'")
+        self.offline_history_list.itemDoubleClicked.connect(self._load_selected_history_day)
+        history_layout.addWidget(self.offline_history_list)
+        history_btn_row = QHBoxLayout()
+        history_btn_row.setSpacing(4)
+        self.offline_load_selected_btn = QPushButton("Load Selected Day")
+        self.offline_load_selected_btn.setCursor(Qt.PointingHandCursor)
+        self.offline_load_selected_btn.setStyleSheet("""
+            QPushButton { background-color: #3a5a3a; color: white; font-size: 10px; padding: 4px 8px; border: none; border-radius: 3px; }
+            QPushButton:hover { background-color: #4a6a4a; }
+        """)
+        self.offline_load_selected_btn.clicked.connect(self._load_selected_history_day)
+        history_btn_row.addWidget(self.offline_load_selected_btn)
+        self.offline_refresh_btn = QPushButton("Refresh")
+        self.offline_refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.offline_refresh_btn.setStyleSheet("""
+            QPushButton { background-color: #444; color: #ccc; font-size: 10px; padding: 4px 8px; border: none; border-radius: 3px; }
+            QPushButton:hover { background-color: #555; }
+        """)
+        self.offline_refresh_btn.clicked.connect(self._refresh_offline_history)
+        history_btn_row.addWidget(self.offline_refresh_btn)
+        history_btn_row.addStretch()
+        history_layout.addLayout(history_btn_row)
+        offline_main.addWidget(history_frame)
+
+        # Row 3: Status labels (loaded file + memory)
         self.offline_path_label = QLabel("No file loaded")
         self.offline_path_label.setStyleSheet("color: #888; font-size: 10px;")
         self.offline_path_label.setWordWrap(True)
-        offline_left.addWidget(self.offline_path_label)
-        offline_main.addLayout(offline_left)
-        # Right: CSV format info and example table
-        self.offline_info_widget = self._create_offline_csv_info_widget()
-        offline_main.addWidget(self.offline_info_widget, 1)
+        offline_main.addWidget(self.offline_path_label)
+        self.offline_memory_label = QLabel("")
+        self.offline_memory_label.setStyleSheet("color: #6a9; font-size: 10px;")
+        self.offline_memory_label.setWordWrap(True)
+        offline_main.addWidget(self.offline_memory_label)
+
         self.offline_panel.setVisible(False)
         self.sidebar_layout.addWidget(self.offline_panel)
 
@@ -3022,6 +3164,11 @@ class MainWindow(QMainWindow):
         self.comm_interval_label.setToolTip("Time between last two received packages. If much higher than requested, PC–PLC communication is slower than the set cycle.")
         content_layout.addWidget(self.comm_interval_label)
         
+        self.comm_db_size_label = QLabel("DB: --")
+        self.comm_db_size_label.setStyleSheet("color: #6a9; font-size: 10px;")
+        self.comm_db_size_label.setToolTip("Current recording database disk size (today's .duckdb file)")
+        content_layout.addWidget(self.comm_db_size_label)
+
         self.comm_message_label = QLabel("")
         self.comm_message_label.setStyleSheet("color: #888; font-size: 10px;")
         self.comm_message_label.setWordWrap(True)
@@ -3056,17 +3203,19 @@ class MainWindow(QMainWindow):
         s.sync()
 
     def on_data_mode_changed(self, mode_text):
-        """Switch between Online Data (real-time) and Offline Data (CSV → DuckDB)."""
+        """Switch between Online Data (real-time) and Offline Data (CSV/DuckDB)."""
         if mode_text == "Offline Data":
             self.online_panel.setVisible(False)
             self.offline_panel.setVisible(True)
-            # Clear variable list until user loads a CSV
+            # Clear variable list until user loads a file
             self.var_list.clear()
             self.all_variables = []
             if self.offline_columns:
                 for c in self.offline_columns:
                     self.var_list.addItem(c)
                 self.all_variables = list(self.offline_columns)
+            # Populate recording history
+            self._refresh_offline_history()
         else:
             self.online_panel.setVisible(True)
             self.offline_panel.setVisible(False)
@@ -3100,6 +3249,188 @@ class MainWindow(QMainWindow):
         self.recording_interval_row_widget.setVisible(ref == "time")
         self.recording_trigger_row_widget.setVisible(ref == "variable")
 
+    def _refresh_offline_history(self):
+        """Scan external/ for recording_*.duckdb files and populate the history list with sizes."""
+        self.offline_history_list.clear()
+        ext_dir = os.path.join(os.path.dirname(__file__), "external")
+        self._offline_db_files = list_recording_db_files(ext_dir)
+        import datetime as _dt
+        today_str = _dt.date.today().isoformat()
+        total_bytes = 0
+        for entry in self._offline_db_files:
+            day_label = entry['date_str']
+            if day_label == today_str:
+                day_label += "  (today)"
+            elif day_label == 'legacy':
+                day_label = "legacy (automation_data.db)"
+            text = f"{day_label}    {entry['size_label']}"
+            self.offline_history_list.addItem(text)
+            total_bytes += entry['size_bytes']
+        # Update total history size label
+        n_files = len(self._offline_db_files)
+        if total_bytes < 1024:
+            total_label = f"{total_bytes} B"
+        elif total_bytes < 1024 * 1024:
+            total_label = f"{total_bytes / 1024:.1f} KB"
+        else:
+            total_label = f"{total_bytes / (1024 * 1024):.1f} MB"
+        if n_files > 0:
+            self.offline_memory_label.setText(f"History: {total_label} total ({n_files} file{'s' if n_files != 1 else ''})")
+        else:
+            self.offline_memory_label.setText("No recording history found")
+
+    def _update_offline_memory_label(self, loaded_file_bytes=0, loaded_row_count=0):
+        """Update the offline memory label with loaded file info + total history size."""
+        # Loaded file info
+        if loaded_file_bytes > 0:
+            if loaded_file_bytes < 1024:
+                loaded_sz = f"{loaded_file_bytes} B"
+            elif loaded_file_bytes < 1024 * 1024:
+                loaded_sz = f"{loaded_file_bytes / 1024:.1f} KB"
+            else:
+                loaded_sz = f"{loaded_file_bytes / (1024 * 1024):.1f} MB"
+            loaded_text = f"Loaded: {loaded_sz} on disk, {loaded_row_count:,} rows in RAM"
+        else:
+            loaded_text = ""
+
+        # History total
+        ext_dir = os.path.join(os.path.dirname(__file__), "external")
+        db_files = list_recording_db_files(ext_dir)
+        total_bytes = sum(e['size_bytes'] for e in db_files)
+        n_files = len(db_files)
+        if total_bytes < 1024:
+            total_label = f"{total_bytes} B"
+        elif total_bytes < 1024 * 1024:
+            total_label = f"{total_bytes / 1024:.1f} KB"
+        else:
+            total_label = f"{total_bytes / (1024 * 1024):.1f} MB"
+        history_text = f"History: {total_label} ({n_files} file{'s' if n_files != 1 else ''})" if n_files > 0 else ""
+
+        parts = [p for p in [loaded_text, history_text] if p]
+        self.offline_memory_label.setText("\n".join(parts) if parts else "")
+
+    def _load_selected_history_day(self, item=None):
+        """Load the selected recording day from the history list."""
+        if not hasattr(self, '_offline_db_files') or not self._offline_db_files:
+            QMessageBox.information(self, "No files", "No recording history files found.")
+            return
+        idx = self.offline_history_list.currentRow()
+        if idx < 0:
+            QMessageBox.information(self, "Select a day", "Select a recording day from the list first.")
+            return
+        if idx >= len(self._offline_db_files):
+            return
+        entry = self._offline_db_files[idx]
+        self._load_duckdb_recording(entry['path'])
+
+    def load_offline_duckdb_file(self):
+        """Browse for a .duckdb file and load it for offline plotting."""
+        ext_dir = os.path.join(os.path.dirname(__file__), "external")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select DuckDB recording file", ext_dir,
+            "DuckDB (*.duckdb *.db);;All files (*)"
+        )
+        if not path:
+            return
+        path = os.path.normpath(path)
+        self._load_duckdb_recording(path)
+
+    def _load_duckdb_recording(self, db_path):
+        """Load a .duckdb recording file (read-only) and populate variables for offline plotting."""
+        try:
+            if self.offline_db:
+                try:
+                    self.offline_db.close()
+                except Exception:
+                    pass
+                self.offline_db = None
+
+            # Open read-only so we don't interfere with active recording
+            self.offline_db = duckdb.connect(database=db_path, read_only=True)
+
+            # Get variable names from exchange_variables
+            result = self.offline_db.execute(
+                "SELECT DISTINCT variable_name FROM exchange_variables ORDER BY variable_name"
+            ).fetchall()
+            var_names = [row[0] for row in result]
+            if not var_names:
+                QMessageBox.warning(self, "No data", f"No recording data found in:\n{os.path.basename(db_path)}")
+                self.offline_db.close()
+                self.offline_db = None
+                return
+
+            # Get time range
+            t_row = self.offline_db.execute(
+                "SELECT min(timestamp), max(timestamp), count(*) FROM exchange_variables"
+            ).fetchone()
+            t_min, t_max, row_count = t_row if t_row else (None, None, 0)
+
+            # Pivot: create an offline_data table in memory from the recording
+            # Close the read-only connection and create a memory DB that queries the file
+            self.offline_db.close()
+            self.offline_db = duckdb.connect(":memory:")
+            # Attach the recording file as read-only
+            self.offline_db.execute(f"ATTACH '{db_path}' AS rec (READ_ONLY)")
+
+            # Build pivot query: timestamp + each variable as a column
+            var_cols = ", ".join(
+                f"max(CASE WHEN variable_name = '{v}' THEN value END) AS \"{v}\""
+                for v in var_names
+            )
+            self.offline_db.execute(f"""
+                CREATE TABLE offline_data AS
+                SELECT timestamp, {var_cols}
+                FROM rec.exchange_variables
+                GROUP BY timestamp
+                ORDER BY timestamp
+            """)
+            self.offline_db.execute("DETACH rec")
+
+            self.offline_columns = ['timestamp'] + var_names
+            self.offline_csv_path = db_path
+            self.var_list.clear()
+            self.all_variables = list(self.offline_columns)
+            for col in self.offline_columns:
+                self.var_list.addItem(col)
+
+            # Update status
+            fname = os.path.basename(db_path)
+            disk_size = os.path.getsize(db_path)
+            if disk_size < 1024 * 1024:
+                sz = f"{disk_size / 1024:.1f} KB"
+            else:
+                sz = f"{disk_size / (1024 * 1024):.1f} MB"
+            time_info = ""
+            if t_min and t_max:
+                time_info = f"\nTime: {t_min.strftime('%H:%M:%S')} → {t_max.strftime('%H:%M:%S')}"
+            self.offline_path_label.setText(f"Loaded: {fname}")
+            self.offline_path_label.setToolTip(db_path)
+
+            # Update memory label with loaded file info + history total
+            self._update_offline_memory_label(disk_size, row_count)
+
+            QMessageBox.information(
+                self, "Recording loaded",
+                f"Loaded {fname}\n"
+                f"{len(var_names)} variables, {row_count:,} rows\n"
+                f"Disk: {sz}{time_info}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to load DuckDB recording: {e}")
+            QMessageBox.warning(
+                self, "Load failed",
+                f"Could not load DuckDB recording:\n{e}"
+            )
+            if self.offline_db:
+                try:
+                    self.offline_db.close()
+                except Exception:
+                    pass
+                self.offline_db = None
+            self.offline_columns = []
+            self.offline_csv_path = None
+            self.offline_path_label.setText("No file loaded")
+
     def load_offline_csv(self):
         """Load a user-selected CSV into DuckDB and populate variable list for offline plotting."""
         path, _ = QFileDialog.getOpenFileName(
@@ -3131,8 +3462,12 @@ class MainWindow(QMainWindow):
             self.all_variables = list(self.offline_columns)
             for col in self.offline_columns:
                 self.var_list.addItem(col)
-            self.offline_path_label.setText(os.path.basename(path))
+            self.offline_path_label.setText(f"Loaded: {os.path.basename(path)}")
             self.offline_path_label.setToolTip(path)
+            # Update memory label with CSV file size
+            csv_size = os.path.getsize(path) if os.path.isfile(path) else 0
+            row_count = self.offline_db.execute("SELECT count(*) FROM offline_data").fetchone()[0]
+            self._update_offline_memory_label(csv_size, row_count)
             QMessageBox.information(
                 self, "CSV loaded",
                 f"Loaded {path} into DuckDB.\n{len(self.offline_columns)} columns available for plotting."
@@ -3611,6 +3946,25 @@ class MainWindow(QMainWindow):
             self.comm_interval_label.setText("Last cycle: -- ms (requested: -- ms)")
             self.comm_interval_label.setStyleSheet("color: #aaa; font-size: 10px;")
         
+        # Database size (today's recording file)
+        db_path = None
+        if self.plc_thread:
+            db_path = getattr(self.plc_thread, "db_path", None)
+        if db_path and os.path.isfile(db_path):
+            try:
+                sz = os.path.getsize(db_path)
+                if sz < 1024:
+                    db_label = f"DB: {sz} B"
+                elif sz < 1024 * 1024:
+                    db_label = f"DB: {sz / 1024:.1f} KB"
+                else:
+                    db_label = f"DB: {sz / (1024 * 1024):.1f} MB"
+                self.comm_db_size_label.setText(f"{db_label}  ({os.path.basename(db_path)})")
+            except Exception:
+                self.comm_db_size_label.setText("DB: --")
+        else:
+            self.comm_db_size_label.setText("DB: --")
+
         # Last message/error (connection errors; ADS variable read failures shown via read_error)
         if status["last_error"]:
             self.comm_message_label.setText(f"⚠ {status['last_error']}")
@@ -3833,7 +4187,7 @@ class MainWindow(QMainWindow):
         is_offline = self.data_mode_combo.currentText() == "Offline Data"
         if is_offline:
             if not self.offline_db or not self.offline_columns:
-                QMessageBox.warning(self, "No data", "Load a CSV first (Offline Data → Load CSV → DuckDB).")
+                QMessageBox.warning(self, "No data", "Load a CSV or recording DB first (Offline Data).")
                 return
         dialog = GraphConfigDialog(self.all_variables, self, selected_vars=var_names)
         if dialog.exec() != QDialog.Accepted:
@@ -4356,9 +4710,6 @@ class MainWindow(QMainWindow):
         db_path = None
         if self.plc_thread:
             db_path = getattr(self.plc_thread, "db_path", None)
-        if not db_path:
-            _ext = os.path.join(os.path.dirname(__file__), "external")
-            db_path = os.path.join(_ext, "automation_data.db")
         if self.simulator_thread and self.simulator_thread.isRunning():
             self.simulator_thread._is_running = False
             self.simulator_thread.wait(2000)
@@ -4366,21 +4717,22 @@ class MainWindow(QMainWindow):
             self.ads_thread.stop()
             self.ads_thread.join(timeout=2.0)
         if self.plc_thread and self.plc_thread.is_alive():
-            self.plc_thread.stop()
+            self.plc_thread.stop()  # CHECKPOINT + close happens in stop()
             self.plc_thread.join(timeout=2.0)
         if self.plc_thread and getattr(self.plc_thread, "db_connection", None):
             try:
                 self.plc_thread.db_connection.close()
             except Exception:
                 pass
-        # If recording DB has data, ask to export then truncate
+        # Recording DB is kept on disk (daily .duckdb files) — offer CSV export as convenience
         if db_path and recording_has_data(db_path):
             reply = QMessageBox.question(
                 self,
-                "Export recording?",
-                "Recording data will be deleted on exit. Export to CSV before closing?",
+                "Export recording to CSV?",
+                "Today's recording is saved in the .duckdb file and will persist.\n"
+                "Would you also like to export it to CSV?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
                 t_min, t_max = get_recording_time_range(db_path)
@@ -4401,9 +4753,6 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(
                                 self, "Export failed", f"Export failed:\n{e}"
                             )
-                    truncate_recording_db(db_path)
-            else:
-                truncate_recording_db(db_path)
         if self.offline_db:
             try:
                 self.offline_db.close()

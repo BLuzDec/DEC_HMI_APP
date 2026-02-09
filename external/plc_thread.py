@@ -55,9 +55,9 @@ class PLCThread(threading.Thread):
         # Get the directory where this file is located
         self.external_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(self.external_dir)
-        self.db_path = os.path.join(self.external_dir, 'automation_data.db')
-        # Max recording duration: keep only last N hours (0 = no limit)
-        self.max_recording_hours = getattr(self, 'max_recording_hours', 24)
+        # Daily DB files: each day gets its own .duckdb file for crash safety and history
+        self._current_db_date = None
+        self.db_path = None  # Set in init_duckdb() to today's file
         
         # Load configuration from external folder
         config_path = os.path.join(self.external_dir, 'snap7_node_ids.json')
@@ -80,9 +80,14 @@ class PLCThread(threading.Thread):
             for key, value in node_config['recipes'].items():
                 self.take_specific_nodes[key] = value
 
-    def init_duckdb(self):
-        # Database stored in external folder
-        self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
+    @staticmethod
+    def get_db_path_for_date(external_dir, dt):
+        """Get the .duckdb file path for a given date."""
+        date_str = dt.strftime("%Y-%m-%d")
+        return os.path.join(external_dir, f'recording_{date_str}.duckdb')
+
+    def _create_tables(self):
+        """Create recording tables if they don't exist."""
         self.db_connection.execute('''
             CREATE TABLE IF NOT EXISTS exchange_variables (
                 timestamp TIMESTAMP,
@@ -99,6 +104,32 @@ class PLCThread(threading.Thread):
                 pr_chamber_array REAL[]
             )
         ''')
+
+    def init_duckdb(self):
+        """Open today's daily database file (.duckdb). Each day gets its own file."""
+        today = datetime.date.today()
+        self._current_db_date = today
+        self.db_path = self.get_db_path_for_date(self.external_dir, today)
+        self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
+        self._create_tables()
+        logging.info(f"DuckDB opened: {self.db_path}")
+
+    def _check_day_rollover(self):
+        """If midnight passed, checkpoint current DB, close it, and open a new daily file."""
+        today = datetime.date.today()
+        if today != self._current_db_date:
+            logging.info(f"Day rollover: closing {self._current_db_date}, opening {today}")
+            if self.db_connection:
+                try:
+                    self.db_connection.execute("CHECKPOINT")
+                    self.db_connection.close()
+                except Exception as e:
+                    logging.warning(f"Error closing DB on day rollover: {e}")
+            self._current_db_date = today
+            self.db_path = self.get_db_path_for_date(self.external_dir, today)
+            self.db_connection = duckdb.connect(database=self.db_path, read_only=False)
+            self._create_tables()
+            logging.info(f"DuckDB day rollover complete: {self.db_path}")
 
     def get_size_of_type(self, var_type):
         sizes = {
@@ -317,18 +348,16 @@ class PLCThread(threading.Thread):
                             self.log_array_data_to_duckdb(dose_number, pt_chamber_array, pr_chamber_array)
                         last_logged_dose_number = dose_number
                 
-                # Periodic purge: keep only last max_recording_hours (every ~500 cycles to avoid overhead)
-                if self.max_recording_hours > 0 and self.read_count % 500 == 0 and self.db_connection:
+                # Day rollover check (every ~500 cycles): if midnight passed, open new daily file
+                if self.read_count % 500 == 0:
+                    self._check_day_rollover()
+                
+                # Periodic CHECKPOINT for crash safety (every ~1000 cycles ≈ 50s at 50ms)
+                if self.read_count % 1000 == 0 and self.db_connection:
                     try:
-                        cutoff = datetime.datetime.now() - datetime.timedelta(hours=self.max_recording_hours)
-                        self.db_connection.execute(
-                            "DELETE FROM exchange_variables WHERE timestamp < ?", (cutoff,)
-                        )
-                        self.db_connection.execute(
-                            "DELETE FROM exchange_recipes WHERE timestamp < ?", (cutoff,)
-                        )
+                        self.db_connection.execute("CHECKPOINT")
                     except Exception as e:
-                        logging.debug(f"Recording purge skipped: {e}")
+                        logging.debug(f"Checkpoint skipped: {e}")
                 
                 # Update stats every 100 reads
                 if self.read_count % 100 == 0:
@@ -435,6 +464,7 @@ class PLCThread(threading.Thread):
         self.stop_event.set()
         if self.db_connection:
             try:
+                self.db_connection.execute("CHECKPOINT")
                 self.db_connection.close()
             except:
                 pass
