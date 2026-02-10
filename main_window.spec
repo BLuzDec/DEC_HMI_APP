@@ -15,6 +15,11 @@ import os
 base_dir = SPECPATH
 external_dir = os.path.join(base_dir, 'external')
 images_dir = os.path.join(base_dir, 'Images')
+icon_file = os.path.join(images_dir, 'app_icon.ico')
+
+# ── version (read from version.txt) ─────────────────────────────────
+_ver_file = os.path.join(base_dir, 'version.txt')
+APP_VERSION = open(_ver_file).read().strip() if os.path.isfile(_ver_file) else '1.0.0'
 
 # ── data files to bundle ─────────────────────────────────────────────
 # Tuple format:  (source_path, destination_folder_in_bundle)
@@ -25,6 +30,7 @@ datas = [
     (os.path.join(images_dir, 'Dec True end-to-end final white_small.png'), 'Images'),
     (os.path.join(images_dir, 'dec_background_endToEnd_bottomRight.png'), 'Images'),
     (os.path.join(images_dir, 'DEC_G-2016_WHITE.png'), 'Images'),
+    (os.path.join(images_dir, 'app_icon.ico'), 'Images'),
 
     # ── External: CSV config files ───────────────────────────────────
     (os.path.join(external_dir, 'exchange_variables.csv'), 'external'),
@@ -127,9 +133,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,                       # GUI app – no console window
-    # To set a custom icon, place a .ico file in Images/ and reference it here:
-    # icon=os.path.join(images_dir, 'app_icon.ico'),
-    icon=None,
+    icon=icon_file if os.path.isfile(icon_file) else None,
     upx_exclude=[],
     runtime_tmpdir=None,
     version=None,
