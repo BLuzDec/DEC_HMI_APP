@@ -114,6 +114,17 @@ echo ===================================================
 echo   BUILD COMPLETE!  v%APP_VERSION%
 echo   Installer: InstallerOutput\DecAutomation_Studio_Setup_v%APP_VERSION%.exe
 echo ===================================================
+
+REM Copy installer to Labo Monitoring folder if successful
+set "DEST_DIR=U:\S&T - Science & Technology\Software\Labo Monitoring\DecAutomation Studio"
+if not exist "%DEST_DIR%" mkdir "%DEST_DIR%"
+copy /Y "InstallerOutput\DecAutomation_Studio_Setup_v%APP_VERSION%.exe" "%DEST_DIR%\"
+if %ERRORLEVEL% equ 0 (
+    echo [OK] Installer copied to: %DEST_DIR%
+) else (
+    echo [WARN] Could not copy installer to %DEST_DIR%
+)
+
 goto :DONE
 
 REM ── Error / info labels ────────────────────────────────────────────
