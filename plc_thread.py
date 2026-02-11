@@ -16,14 +16,15 @@ class PLCThread(threading.Thread):
         self.stop_event = threading.Event()
         self.client = snap7.client.Client()
         self.db_connection = None
-        self.name_system = 'FlexPTS'
+        self.name_system = 'Snap7'
         self.read_count = 0
         self.error_count = 0
         self.last_error = None
 
         with open('snap7_node_ids.json') as f:
             self.config = json.load(f)
-        self.take_specific_nodes = self.config['Node_id_flexpts_S7_1500_snap7']
+        # Support both new generic key and legacy key for backward compatibility
+        self.take_specific_nodes = self.config.get('snap7_variables') or self.config.get('Node_id_flexpts_S7_1500_snap7', {})
 
     def init_duckdb(self):
         self.db_connection = duckdb.connect(database='automation_data.db', read_only=False)

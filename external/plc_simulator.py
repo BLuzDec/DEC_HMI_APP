@@ -19,9 +19,14 @@ class PLCSimulator(QThread):
         # Get the directory where this file is located
         self.external_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Default CSV path in external folder
+        # Default CSV path in external folder — prefer DB-named CSVs
         if csv_path is None:
-            csv_path = os.path.join(self.external_dir, 'exchange_variables.csv')
+            try:
+                from variable_loader import discover_csv_files
+                _disc_ex, _ = discover_csv_files(self.external_dir)
+                csv_path = _disc_ex or os.path.join(self.external_dir, 'exchange_variables.csv')
+            except Exception:
+                csv_path = os.path.join(self.external_dir, 'exchange_variables.csv')
         self.csv_path = csv_path
         
         self.variables = self._load_variables()
@@ -113,7 +118,12 @@ class PLCSimulator(QThread):
 
     def _load_recipe_variables(self):
         """Load recipe variables CSV so simulator can emit them for tooltip (same format as exchange)."""
-        recipe_path = os.path.join(self.external_dir, 'recipe_variables.csv')
+        try:
+            from variable_loader import discover_csv_files
+            _, _disc_rec = discover_csv_files(self.external_dir)
+            recipe_path = _disc_rec or os.path.join(self.external_dir, 'recipe_variables.csv')
+        except Exception:
+            recipe_path = os.path.join(self.external_dir, 'recipe_variables.csv')
         variables = []
         if os.path.exists(recipe_path):
             try:

@@ -1,0 +1,16 @@
+Variable;Type;Min;Max;Unit;Name
+rEjectingPressure1;REAL;0;10;bar;Ejecting pressure 1
+rTimerEjection1;REAL;0;100;s;Timer ejection 1
+rEjectingPressure2;REAL;0;10;bar;Ejecting pressure 2
+rTimerEjection2;REAL;0;100;s;Timer ejection 2
+rUncloggingPressure;REAL;0;10;bar;Unclogging pressure
+rVacuumPressure1;REAL;0;10;bar;Vacuum pressure 1
+rTimerSuction;REAL;0;100;s;Timer suction
+rVacuumPressure2;REAL;0;10;bar;Vacuum pressure 2
+rDelayAlternateVacuum;REAL;0;100;s;Delay alternate vacuum
+rDelayCloseOutletValve;REAL;0;100;s;Delay close outlet valve
+rDelaySetEjectingPressure1;REAL;0;100;s;Delay set ejecting pressure 1
+rVibratorPressure;REAL;0;10;bar;Vibrator pressure
+rTimerVibrator;REAL;0;100;s;Timer vibrator
+rDelayVibrator;REAL;0;100;s;Delay vibrator
+rDelayAtmPressure;REAL;0;100;s;Delay atm pressure

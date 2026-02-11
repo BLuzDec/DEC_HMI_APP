@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QGridLayout, QProxyStyle, QStyle, QApplication,
     QTabWidget, QCheckBox, QColorDialog, QSizePolicy
 )
-from PySide6.QtCore import Qt, QTimer, QEvent
+from PySide6.QtCore import Qt, QTimer, QEvent, QSettings
 from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont, QIcon
 
 from external.calculations import DataAnalyzer
@@ -50,7 +50,7 @@ def _app_icon_analytics():
 
 
 class _AnalyticsTitleBar(QWidget):
-    """Custom dark title bar for the Analytics window (icon + title + window controls)."""
+    """Custom title bar for the Analytics window (icon + title + window controls)."""
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -58,6 +58,7 @@ class _AnalyticsTitleBar(QWidget):
         self._drag_pos = None
         self.setFixedHeight(32)
         self.setStyleSheet("background-color: #1e1e1e;")
+        self._title_label = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 0, 0, 0)
@@ -73,10 +74,10 @@ class _AnalyticsTitleBar(QWidget):
         layout.addSpacing(8)
 
         # Title
-        title = QLabel("Graph Analytics")
-        title.setStyleSheet("color: #cccccc; font-size: 12px; background: transparent;")
-        title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(title)
+        self._title_label = QLabel("Graph Analytics")
+        self._title_label.setStyleSheet("color: #cccccc; font-size: 12px; background: transparent;")
+        self._title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self._title_label)
 
         # Draggable spacer
         spacer = QLabel()
@@ -143,6 +144,20 @@ class _AnalyticsTitleBar(QWidget):
         if event.button() == Qt.LeftButton:
             self._toggle_maximize()
 
+    def apply_theme(self, mode="dark"):
+        """Apply dark or light theme to title bar."""
+        if mode == "light":
+            bg = "#f0f0f0"
+            fg = "#333333"
+            btn_hover = "#d0d0d0"
+        else:
+            bg = "#1e1e1e"
+            fg = "#cccccc"
+            btn_hover = "#3e3e42"
+        self.setStyleSheet(f"background-color: {bg};")
+        if self._title_label:
+            self._title_label.setStyleSheet(f"color: {fg}; font-size: 12px; background: transparent;")
+
 
 class AnalyticsWindow(QWidget):
     """Analytics window with time-series tracking of metrics."""
@@ -186,9 +201,11 @@ class AnalyticsWindow(QWidget):
         
         self._variable_panels = {}
         self._last_data_hash = {}
-        
-        self._apply_theme()
-        
+        s = QSettings("DecAutomation", "Studio")
+        self._graph_background_mode = s.value("graph_background_mode", "dark")
+        if self._graph_background_mode not in ("dark", "light"):
+            self._graph_background_mode = "dark"
+
         # Root layout: custom title bar on top, content below
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(1, 0, 1, 1)
@@ -239,23 +256,25 @@ class AnalyticsWindow(QWidget):
         
         main_layout.addLayout(header_layout)
         
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
         
         self.content_widget = QWidget()
         self.content_widget.setStyleSheet("background-color: #1e1e1e;")
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setSpacing(15)
-        self.scroll.setWidget(self.content_widget)
+        self.scroll_area.setWidget(self.content_widget)
         
-        main_layout.addWidget(self.scroll)
+        main_layout.addWidget(self.scroll_area)
         
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.update_analytics)
         self.refresh_timer.start(1000)  # Update every second for smoother graphs
         
-        self.scroll.viewport().installEventFilter(self)
+        self.scroll_area.viewport().installEventFilter(self)
+
+        self._apply_theme()
     
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.Wheel, QEvent.Type.KeyPress, QEvent.Type.FocusIn):
@@ -270,16 +289,118 @@ class AnalyticsWindow(QWidget):
         self._user_interacting = False
     
     def _apply_theme(self):
-        self.setStyleSheet("""
-            QWidget { background-color: #1e1e1e; color: #e0e0e0; }
-            QLineEdit { background-color: #333; color: white; border: 1px solid #555; border-radius: 3px; padding: 4px 8px; }
-            QLineEdit:focus { border-color: #1a6fa5; }
-            QTabWidget::pane { border: 1px solid #3e3e42; background-color: #252526; border-radius: 4px; }
-            QTabBar::tab { background-color: #2d2d30; color: #aaa; padding: 8px 16px; border-top-left-radius: 4px; border-top-right-radius: 4px; }
-            QTabBar::tab:selected { background-color: #3e3e42; color: #fff; }
+        if self._graph_background_mode == "light":
+            bg = "#f5f5f5"
+            bg_widget = "#ffffff"
+            color = "#333333"
+            input_bg = "#ffffff"
+            input_border = "#aaa"
+            tab_pane_bg = "#f0f0f0"
+            tab_bg = "#e0e0e0"
+            tab_fg = "#444"
+            tab_selected_bg = "#d0d0d0"
+            tab_selected_fg = "#111"
+        else:
+            bg = "#1e1e1e"
+            bg_widget = "#1e1e1e"
+            color = "#e0e0e0"
+            input_bg = "#333"
+            input_border = "#555"
+            tab_pane_bg = "#252526"
+            tab_bg = "#2d2d30"
+            tab_fg = "#aaa"
+            tab_selected_bg = "#3e3e42"
+            tab_selected_fg = "#fff"
+        self.setStyleSheet(f"""
+            QWidget {{ background-color: {bg}; color: {color}; }}
+            QLineEdit {{ background-color: {input_bg}; color: {color}; border: 1px solid {input_border}; border-radius: 3px; padding: 4px 8px; }}
+            QLineEdit:focus {{ border-color: #1a6fa5; }}
+            QTabWidget::pane {{ border: 1px solid {input_border}; background-color: {tab_pane_bg}; border-radius: 4px; }}
+            QTabBar::tab {{ background-color: {tab_bg}; color: {tab_fg}; padding: 8px 16px; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
+            QTabBar::tab:selected {{ background-color: {tab_selected_bg}; color: {tab_selected_fg}; }}
         """)
-    
-    
+        if hasattr(self, "scroll_area"):
+            self.scroll_area.setStyleSheet(f"QScrollArea {{ border: none; background-color: {bg}; }}")
+        if hasattr(self, "content_widget"):
+            self.content_widget.setStyleSheet(f"background-color: {bg};")
+
+    def apply_background_theme(self, mode="dark"):
+        """Apply dark or light background theme. Called from main window when user changes View menu."""
+        self._graph_background_mode = mode
+        self._apply_theme()
+        if hasattr(self, "_title_bar") and hasattr(self._title_bar, "apply_theme"):
+            self._title_bar.apply_theme(mode)
+
+        # Update header title
+        if mode == "light":
+            header_fg = "#333"
+            panel_bg = "#f5f5f5"
+            stat_box_bg = "#e8e8e8"
+            stat_box_fg = "#333"
+            table_bg = "#ffffff"
+            table_header_bg = "#e0e0e0"
+        else:
+            header_fg = "#e0e0e0"
+            panel_bg = "#252526"
+            stat_box_bg = "#252526"
+            stat_box_fg = "#e0e0e0"
+            table_bg = "#252526"
+            table_header_bg = "#3e3e42"
+
+        # Header "Graph Analytics" title
+        for child in self.findChildren(QLabel):
+            if child.text() == "Graph Analytics" and child.font().pointSize() >= 14:
+                child.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {header_fg};")
+
+        # Variable panels (graph panels and variable tab containers)
+        for i in range(self.content_layout.count()):
+            item = self.content_layout.itemAt(i)
+            if item and item.widget():
+                w = item.widget()
+                if isinstance(w, QFrame):
+                    w.setStyleSheet(f"QFrame {{ background-color: {panel_bg}; border: 1px solid {'#bbb' if mode == 'light' else '#3e3e42'}; border-radius: 6px; }}")
+
+        # Update nested variable tab containers and stats/tables in panel_refs
+        axis_pen = "#555" if mode == "light" else "#888"
+        text_color = "#333" if mode == "light" else "#aaa"
+        plot_bg = "#ffffff" if mode == "light" else "#1e1e1e"
+        for var_name, panel_refs in self._variable_panels.items():
+            if "hist_plot" in panel_refs:
+                pw = panel_refs["hist_plot"]
+                pw.setBackground(plot_bg)
+                pw.setLabel("left", "Frequency", color=axis_pen, size="9pt")
+                pw.setLabel("bottom", panel_refs.get("display_name", ""), color=axis_pen, size="9pt")
+            for metric in ("rsd", "cp", "cpk", "cpm"):
+                key = f"{metric}_plot"
+                if key in panel_refs:
+                    pw = panel_refs[key]
+                    pw.setBackground(plot_bg)
+                    pw.getAxis("left").setPen(axis_pen)
+                    pw.getAxis("bottom").setPen(axis_pen)
+                    pw.getAxis("left").setTextPen(text_color)
+                    pw.getAxis("bottom").setTextPen(text_color)
+                lbl_key = f"{metric}_value_label"
+                if lbl_key in panel_refs and hasattr(panel_refs[lbl_key], "setColor"):
+                    panel_refs[lbl_key].setColor(text_color if mode == "light" else "#fff")
+            # Frequency table
+            if "freq_table" in panel_refs:
+                tbl = panel_refs["freq_table"]
+                tbl.setStyleSheet(f"QTableWidget {{ background-color: {table_bg}; gridline-color: {'#ddd' if mode == 'light' else '#3e3e42'}; border: none; font-size: 9px; color: {stat_box_fg}; }}")
+                tbl.horizontalHeader().setStyleSheet(f"QHeaderView::section {{ background-color: {table_header_bg}; color: {stat_box_fg}; padding: 3px; border: none; font-size: 9px; }}")
+            # Stat value boxes (e.g. metric_stats for Cp, Cpk trends)
+            for key in list(panel_refs.keys()):
+                if key.endswith("_stats") and hasattr(panel_refs[key], "setStyleSheet"):
+                    panel_refs[key].setStyleSheet(f"font-size: 10px; color: {stat_box_fg}; border: none; background-color: {stat_box_bg}; padding: 8px; border-radius: 4px;")
+
+        # Update variable tab containers (nested frames)
+        from PySide6.QtWidgets import QTabWidget
+        for tw in self.findChildren(QTabWidget):
+            tw.setStyleSheet(f"""
+                QTabWidget::pane {{ border: 1px solid {'#bbb' if mode == 'light' else '#3e3e42'}; background-color: {panel_bg}; border-radius: 4px; }}
+                QTabBar::tab {{ background-color: {'#e0e0e0' if mode == 'light' else '#2d2d30'}; color: {stat_box_fg}; padding: 8px 16px; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
+                QTabBar::tab:selected {{ background-color: {'#d0d0d0' if mode == 'light' else '#3e3e42'}; color: {stat_box_fg}; }}
+            """)
+
     def _toggle_auto_refresh(self, checked):
         self.auto_refresh_btn.setText("Auto-Refresh: ON" if checked else "Auto-Refresh: OFF")
         self.refresh_timer.start(1000) if checked else self.refresh_timer.stop()
@@ -323,11 +444,46 @@ class AnalyticsWindow(QWidget):
     def _get_unit(self, var_name):
         return self.variable_metadata.get(var_name, {}).get("unit", "").strip()
     
-    def _get_x_values_for_analytics(self, graph, n):
+    def _get_y_data_for_analytics(self, graph, var_name):
+        """Get Y data appropriate for analytics based on graph X-axis type.
+        
+        For discrete index with linked variable: use buffer_x_snapshots (one Y per dose/index),
+        since buffers_y accumulates many samples per dose. The snapshots capture the value
+        at each dose transition, matching the discrete index semantics.
+        """
+        is_discrete_linked = (
+            getattr(graph, 'is_discrete_index', False)
+            and getattr(graph, 'discrete_index_linked_variable', None)
+        )
+        if is_discrete_linked:
+            snapshots = list(getattr(graph, 'buffer_x_snapshots', []))
+            x_list = list(getattr(graph, 'buffers_x_discrete', []))
+            n = min(len(snapshots), len(x_list))
+            if n == 0:
+                return []
+            result = []
+            for i in range(n):
+                snap = snapshots[i]
+                val = snap.get(var_name) if isinstance(snap, dict) else None
+                if val is not None and val != "":
+                    try:
+                        v = float(val)
+                        result.append(v if not (np.isnan(v) or np.isinf(v)) else np.nan)
+                    except (ValueError, TypeError):
+                        result.append(np.nan)
+                else:
+                    result.append(np.nan)
+            return result
+        return list(graph.buffers_y.get(var_name, []))
+    
+    def _get_x_values_for_analytics(self, graph, n, var_name=None):
         """Get X values array of length n corresponding to buffered data points.
         
         Matches the X values used by the plot so that the axis range settings
         correctly map to the underlying data indices/values.
+        
+        For XY plots, var_name is used to get the aligned x buffer (each variable
+        has its own x buffer with x_axis_source values).
         """
         try:
             if getattr(graph, 'is_discrete_index', False):
@@ -338,8 +494,10 @@ class AnalyticsWindow(QWidget):
                         return arr
                 return np.arange(1, n + 1, dtype=float)
             elif getattr(graph, 'is_xy_plot', False):
-                x_src = getattr(graph, 'x_axis_source', '')
-                x_raw = list(graph.buffers_x.get(x_src, []))
+                # For XY plots, x values are stored per variable; use var_name first, then x_axis_source
+                x_raw = list(graph.buffers_x.get(var_name or '', [])) if var_name else []
+                if not x_raw and getattr(graph, 'x_axis_source', ''):
+                    x_raw = list(graph.buffers_x.get(graph.x_axis_source, []))
                 if x_raw and len(x_raw) >= n:
                     arr = np.array(x_raw[:n], dtype=float)
                     if not np.any(np.isnan(arr)):
@@ -355,8 +513,26 @@ class AnalyticsWindow(QWidget):
         
         1. X-axis filter: When X range is not 'auto', only include data points
            whose X value falls within [x_min, x_max].
-        2. Tolerance filter: Only include data points within setpoint ± tolerance%.
+        2. Grouping for discrete/variable X: When X-axis is a variable or discrete
+           index (e.g., Dose number 1,2,3...10), group Y values by unique X and use
+           the mean per group so analytics reflect variability across unique X values,
+           not within repeated samples at the same X.
+        3. Tolerance filter: Only include data points within setpoint ± tolerance%.
         """
+        if len(y_array) == 0:
+            return y_array
+        
+        n = len(y_array)
+        x_array = self._get_x_values_for_analytics(graph, n, var_name)
+        min_len = min(len(x_array), n)
+        x_array = np.array(x_array[:min_len], dtype=float)
+        y_array = np.array(y_array[:min_len], dtype=float)
+        
+        # Remove invalid pairs
+        valid = ~(np.isnan(x_array) | np.isnan(y_array) | np.isinf(x_array) | np.isinf(y_array))
+        x_array = x_array[valid]
+        y_array = y_array[valid]
+        
         if len(y_array) == 0:
             return y_array
         
@@ -364,16 +540,25 @@ class AnalyticsWindow(QWidget):
         range_settings = getattr(graph, 'range_settings', {})
         x_settings = range_settings.get('x', {})
         if not x_settings.get('auto', True):
-            n = len(y_array)
-            x_array = self._get_x_values_for_analytics(graph, n)
-            min_len = min(len(x_array), n)
-            x_array = x_array[:min_len]
-            y_array = y_array[:min_len]
-            
             x_min = x_settings.get('min', -np.inf)
             x_max = x_settings.get('max', np.inf)
             x_mask = (x_array >= x_min) & (x_array <= x_max)
+            x_array = x_array[x_mask]
             y_array = y_array[x_mask]
+        
+        if len(y_array) == 0:
+            return y_array
+        
+        # --- Group by unique X when axis is variable or discrete index ---
+        # For Time (Index): each point is a distinct sample, use all values.
+        # For variable/discrete X: group Y by unique X, use mean per group for analytics.
+        if getattr(graph, 'is_xy_plot', False) or getattr(graph, 'is_discrete_index', False):
+            unique_x = np.unique(x_array)
+            group_means = []
+            for x_val in unique_x:
+                mask = (x_array == x_val)
+                group_means.append(np.mean(y_array[mask]))
+            y_array = np.array(group_means, dtype=float)
         
         if len(y_array) == 0:
             return y_array
@@ -401,7 +586,7 @@ class AnalyticsWindow(QWidget):
                 for var_name in graph.variables:
                     refs = self._variable_panels.get(var_name)
                     if refs and 'waiting_label' in refs:
-                        y_data = list(graph.buffers_y.get(var_name, []))
+                        y_data = self._get_y_data_for_analytics(graph, var_name)
                         if y_data:
                             needs_rebuild = True
                             break
@@ -436,30 +621,32 @@ class AnalyticsWindow(QWidget):
                     if var_name not in self._variable_panels:
                         continue
                     
-                    y_data = list(graph.buffers_y.get(var_name, []))
+                    y_data = self._get_y_data_for_analytics(graph, var_name)
                     if not y_data:
                         continue
                     
-                    # Include range/tolerance settings in hash so analytics update when they change
+                    # Include range/tolerance settings and X-axis type in hash so analytics update when they change
                     range_settings = getattr(graph, 'range_settings', {})
                     x_settings = range_settings.get('x', {})
-                    data_hash = (len(y_data), round(y_data[-1], 10) if y_data else 0,
+                    last_val = 0
+                    if y_data:
+                        try:
+                            v = y_data[-1]
+                            last_val = round(float(v), 10) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0
+                        except (ValueError, TypeError):
+                            pass
+                    data_hash = (len(y_data), last_val,
                                  x_settings.get('auto', True),
                                  round(x_settings.get('min', 0), 6), round(x_settings.get('max', 0), 6),
                                  round(self.setpoints.get(var_name, 0), 6),
-                                 round(self.tolerances.get(var_name, 1.0), 6))
+                                 round(self.tolerances.get(var_name, 1.0), 6),
+                                 getattr(graph, 'is_xy_plot', False), getattr(graph, 'is_discrete_index', False))
                     if self._last_data_hash.get(var_name) == data_hash:
                         continue
                     
-                    y_array = np.array(y_data, dtype=float)
-                    y_array = y_array[~(np.isnan(y_array) | np.isinf(y_array))]
-                    
-                    if len(y_array) == 0:
-                        self._last_data_hash[var_name] = data_hash
-                        continue
-                    
-                    # Apply X-axis range and tolerance filters
-                    y_array = self._apply_filters(graph, var_name, y_array)
+                    y_array_raw = np.array(y_data, dtype=float)
+                    # _apply_filters needs raw (x,y) alignment; it handles nan/inf internally
+                    y_array = self._apply_filters(graph, var_name, y_array_raw)
                     
                     if len(y_array) == 0:
                         self._last_data_hash[var_name] = data_hash
@@ -505,7 +692,10 @@ class AnalyticsWindow(QWidget):
             return None
         
         panel = QFrame()
-        panel.setStyleSheet("QFrame { background-color: #252526; border: 1px solid #3e3e42; border-radius: 6px; }")
+        _light = self._graph_background_mode == "light"
+        _panel_bg = "#f5f5f5" if _light else "#252526"
+        _border = "#bbb" if _light else "#3e3e42"
+        panel.setStyleSheet(f"QFrame {{ background-color: {_panel_bg}; border: 1px solid {_border}; border-radius: 6px; }}")
         
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(12, 10, 12, 12)
@@ -514,7 +704,8 @@ class AnalyticsWindow(QWidget):
         display_names = [self._get_display_name(v) for v in graph.variables]
         title = graph.graph_title or " / ".join(display_names)
         header = QLabel(title)
-        header.setStyleSheet("font-size: 13px; font-weight: bold; color: #e0e0e0; border: none;")
+        _hfg = "#333" if _light else "#e0e0e0"
+        header.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {_hfg}; border: none;")
         panel_layout.addWidget(header)
         
         for var_name in graph.variables:
@@ -525,27 +716,20 @@ class AnalyticsWindow(QWidget):
         return panel
     
     def _create_variable_tabs(self, graph, var_name):
-        y_data = list(graph.buffers_y.get(var_name, []))
+        y_data = self._get_y_data_for_analytics(graph, var_name)
         
         display_name = self._get_display_name(var_name)
         unit = self._get_unit(var_name)
         
-        # Parse raw data
-        if y_data:
-            y_array_raw = np.array(y_data, dtype=float)
-            y_array_raw = y_array_raw[~(np.isnan(y_array_raw) | np.isinf(y_array_raw))]
-        else:
-            y_array_raw = np.array([], dtype=float)
+        # Parse raw data (keep full length for correct x,y alignment in _apply_filters)
+        y_array_raw = np.array(y_data, dtype=float) if y_data else np.array([], dtype=float)
         
-        # Initialize setpoint from unfiltered data if needed
-        if len(y_array_raw) > 0 and (var_name not in self.setpoints or self.setpoints[var_name] == 0.0):
-            self.setpoints[var_name] = float(np.mean(y_array_raw))
+        # Apply filters (handles nan/inf, x range, grouping by unique X, tolerance)
+        y_array = self._apply_filters(graph, var_name, y_array_raw)
         
-        # Apply X-axis range and tolerance filters
-        if len(y_array_raw) > 0:
-            y_array = self._apply_filters(graph, var_name, y_array_raw.copy())
-        else:
-            y_array = y_array_raw
+        # Initialize setpoint from filtered data if needed
+        if len(y_array) > 0 and (var_name not in self.setpoints or self.setpoints[var_name] == 0.0):
+            self.setpoints[var_name] = float(np.mean(y_array))
         
         has_data = len(y_array) > 0
         
@@ -592,7 +776,14 @@ class AnalyticsWindow(QWidget):
         }
         
         container = QFrame()
-        container.setStyleSheet("QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; }")
+        _light = self._graph_background_mode == "light"
+        _cont_bg = "#f0f0f0" if _light else "#2d2d30"
+        _cont_border = "#bbb" if _light else "#3e3e42"
+        _tab_pane_bg = "#f5f5f5" if _light else "#1e1e1e"
+        _tab_bg = "#e0e0e0" if _light else "#2d2d30"
+        _tab_fg = "#333" if _light else "#999"
+        _tab_selected = "#d0d0d0" if _light else "#1e1e1e"
+        container.setStyleSheet(f"QFrame {{ background-color: {_cont_bg}; border: 1px solid {_cont_border}; border-radius: 4px; }}")
         
         main_layout = QVBoxLayout(container)
         main_layout.setContentsMargins(10, 8, 10, 10)
@@ -602,7 +793,8 @@ class AnalyticsWindow(QWidget):
         header_layout = QHBoxLayout()
         unit_str = f" [{unit}]" if unit else ""
         var_title = QLabel(f"{display_name}{unit_str}")
-        var_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #aaa; border: none;")
+        _var_fg = "#333" if _light else "#aaa"
+        var_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_var_fg}; border: none;")
         header_layout.addWidget(var_title)
         header_layout.addStretch()
         
@@ -686,10 +878,10 @@ class AnalyticsWindow(QWidget):
             panel_refs['waiting_label'] = waiting_label
         else:
             tabs = QTabWidget()
-            tabs.setStyleSheet("""
-                QTabWidget::pane { border: 1px solid #3e3e42; background-color: #1e1e1e; }
-                QTabBar::tab { background-color: #2d2d30; color: #999; padding: 6px 12px; font-size: 10px; }
-                QTabBar::tab:selected { background-color: #1e1e1e; color: #fff; }
+            tabs.setStyleSheet(f"""
+                QTabWidget::pane {{ border: 1px solid {_cont_border}; background-color: {_tab_pane_bg}; }}
+                QTabBar::tab {{ background-color: {_tab_bg}; color: {_tab_fg}; padding: 6px 12px; font-size: 10px; }}
+                QTabBar::tab:selected {{ background-color: {_tab_selected}; color: {_tab_fg}; }}
             """)
             
             tab1 = self._create_distribution_tab(var_name, stats, dist_data, capability, panel_refs)
@@ -708,7 +900,14 @@ class AnalyticsWindow(QWidget):
             main_layout.addWidget(tabs)
         
         self._variable_panels[var_name] = panel_refs
-        self._last_data_hash[var_name] = (len(y_data), y_data[-1] if y_data else 0)
+        last_v = 0
+        if y_data:
+            try:
+                v = y_data[-1]
+                last_v = round(float(v), 10) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0
+            except (ValueError, TypeError):
+                pass
+        self._last_data_hash[var_name] = (len(y_data), last_v)
         
         return container
     
@@ -721,10 +920,13 @@ class AnalyticsWindow(QWidget):
         
         # Left: Histogram
         plot_widget = pg.PlotWidget()
-        plot_widget.setBackground('#1e1e1e')
+        _is_light = self._graph_background_mode == "light"
+        _bg = "#ffffff" if _is_light else "#1e1e1e"
+        _ax = "#555" if _is_light else "#888"
+        plot_widget.setBackground(_bg)
         plot_widget.showGrid(x=True, y=True, alpha=0.15)
-        plot_widget.setLabel('left', 'Frequency', color='#888', size='9pt')
-        plot_widget.setLabel('bottom', panel_refs['display_name'], color='#888', size='9pt')
+        plot_widget.setLabel('left', 'Frequency', color=_ax, size='9pt')
+        plot_widget.setLabel('bottom', panel_refs['display_name'], color=_ax, size='9pt')
         self._draw_histogram(plot_widget, dist_data)
         panel_refs['hist_plot'] = plot_widget
         layout.addWidget(plot_widget, stretch=3)
@@ -758,12 +960,16 @@ class AnalyticsWindow(QWidget):
         
         # Left: Time-series plot
         plot_widget = pg.PlotWidget()
-        plot_widget.setBackground('#1e1e1e')
+        _is_light = self._graph_background_mode == "light"
+        _bg = "#ffffff" if _is_light else "#1e1e1e"
+        _ax = "#555" if _is_light else "#555"
+        _tx = "#333" if _is_light else "#aaa"
+        plot_widget.setBackground(_bg)
         plot_widget.showGrid(x=True, y=True, alpha=0.2)
-        plot_widget.setLabel('left', f'{metric_name}{unit_suffix}', color='#aaa', size='10pt')
-        plot_widget.setLabel('bottom', 'Sample #', color='#aaa', size='10pt')
-        plot_widget.getAxis('left').setPen('#555')
-        plot_widget.getAxis('bottom').setPen('#555')
+        plot_widget.setLabel('left', f'{metric_name}{unit_suffix}', color=_tx, size='10pt')
+        plot_widget.setLabel('bottom', 'Sample #', color=_tx, size='10pt')
+        plot_widget.getAxis('left').setPen(_ax)
+        plot_widget.getAxis('bottom').setPen(_ax)
         
         # Add threshold lines for capability metrics
         if metric_key in ['cp', 'cpk', 'cpm']:
@@ -794,7 +1000,8 @@ class AnalyticsWindow(QWidget):
         plot_widget.addItem(hLine, ignoreBounds=True)
         
         # Value label for hover
-        value_label = pg.TextItem(text="", color='#fff', anchor=(0, 1))
+        _vl_color = "#333" if _is_light else "#fff"
+        value_label = pg.TextItem(text="", color=_vl_color, anchor=(0, 1))
         value_label.setFont(pg.QtGui.QFont('Arial', 10, pg.QtGui.QFont.Weight.Bold))
         value_label.setVisible(False)
         plot_widget.addItem(value_label, ignoreBounds=True)
@@ -867,7 +1074,8 @@ class AnalyticsWindow(QWidget):
             rating = "Excellent" if current_val >= 1.67 else "Capable" if current_val >= 1.33 else "Marginal" if current_val >= 1.0 else "Not Capable"
         
         title_lbl = QLabel(f"Current {metric_name}")
-        title_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #aaa; border: none;")
+        _tl_fg = "#333" if _is_light else "#aaa"
+        title_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_tl_fg}; border: none;")
         info_layout.addWidget(title_lbl)
         
         val_display = QLabel(f"{current_val:.3f}{unit_suffix}")
@@ -892,7 +1100,9 @@ class AnalyticsWindow(QWidget):
             stats_text = "Collecting data..."
         
         metric_stats = QLabel(stats_text)
-        metric_stats.setStyleSheet("font-size: 10px; color: #888; border: none; background-color: #252526; padding: 8px; border-radius: 4px;")
+        _ms_bg = "#e8e8e8" if _is_light else "#252526"
+        _ms_fg = "#333" if _is_light else "#888"
+        metric_stats.setStyleSheet(f"font-size: 10px; color: {_ms_fg}; border: none; background-color: {_ms_bg}; padding: 8px; border-radius: 4px;")
         info_layout.addWidget(metric_stats)
         panel_refs[f'{metric_key}_stats'] = metric_stats
         
@@ -1181,8 +1391,13 @@ class AnalyticsWindow(QWidget):
         table = QTableWidget()
         table.setColumnCount(3)
         table.setHorizontalHeaderLabels(['Range', 'N', '%'])
-        table.horizontalHeader().setStyleSheet("QHeaderView::section { background-color: #3e3e42; color: #ccc; padding: 3px; border: none; font-size: 9px; }")
-        table.setStyleSheet("QTableWidget { background-color: #252526; gridline-color: #3e3e42; border: none; font-size: 9px; }")
+        _light = self._graph_background_mode == "light"
+        _tbl_bg = "#ffffff" if _light else "#252526"
+        _tbl_header = "#e0e0e0" if _light else "#3e3e42"
+        _tbl_fg = "#333" if _light else "#ccc"
+        _grid = "#ddd" if _light else "#3e3e42"
+        table.horizontalHeader().setStyleSheet(f"QHeaderView::section {{ background-color: {_tbl_header}; color: {_tbl_fg}; padding: 3px; border: none; font-size: 9px; }}")
+        table.setStyleSheet(f"QTableWidget {{ background-color: {_tbl_bg}; gridline-color: {_grid}; border: none; font-size: 9px; color: {_tbl_fg}; }}")
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
@@ -1514,33 +1729,33 @@ class AnalyticsWindow(QWidget):
             import ctypes.wintypes
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == 0x0084:  # WM_NCHITTEST
-                x = msg.lParam & 0xFFFF
-                y = (msg.lParam >> 16) & 0xFFFF
-                if x >= 0x8000:
-                    x -= 0x10000
-                if y >= 0x8000:
-                    y -= 0x10000
-                geo = self.frameGeometry()
+                # Cursor position in physical screen pixels (signed 16-bit)
+                x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                # Use Win32 GetWindowRect so coordinates match lParam's space
+                # (avoids DPI logical-vs-physical pixel mismatch with Qt's frameGeometry)
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(msg.hWnd, ctypes.byref(rect))
                 b = self._BORDER
-                left = abs(x - geo.left()) <= b
-                right = abs(x - geo.right()) <= b
-                top = abs(y - geo.top()) <= b
-                bottom = abs(y - geo.bottom()) <= b
-                if top and left:
+                at_left   = x - rect.left < b
+                at_right  = rect.right - x < b
+                at_top    = y - rect.top < b
+                at_bottom = rect.bottom - y < b
+                if at_top and at_left:
                     return True, 13
-                if top and right:
+                if at_top and at_right:
                     return True, 14
-                if bottom and left:
+                if at_bottom and at_left:
                     return True, 16
-                if bottom and right:
+                if at_bottom and at_right:
                     return True, 17
-                if left:
+                if at_left:
                     return True, 10
-                if right:
+                if at_right:
                     return True, 11
-                if top:
+                if at_top:
                     return True, 12
-                if bottom:
+                if at_bottom:
                     return True, 15
         except Exception:
             pass

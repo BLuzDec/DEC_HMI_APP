@@ -1,5 +1,5 @@
 ; ==========================================================================
-; Inno Setup Script for ProAutomation Studio
+; Inno Setup Script for DecAutomation Studio
 ; ==========================================================================
 ;
 ; This script is called by build_installer.bat with:
@@ -15,15 +15,15 @@
 #endif
 
 [Setup]
-AppName=ProAutomation Studio
+AppName=DecAutomation Studio
 AppVersion={#MyAppVersion}
 AppPublisher=DEC Group
 AppId=0c82f26c-055e-471d-bbd9-784bf3d68507
-DefaultDirName={autopf}\ProAutomation Studio
-DefaultGroupName=ProAutomation Studio
+DefaultDirName={autopf}\DecAutomation Studio
+DefaultGroupName=DecAutomation Studio
 DisableProgramGroupPage=yes
 ; Output filename includes the version number
-OutputBaseFilename=ProAutomation_Studio_Setup_v{#MyAppVersion}
+OutputBaseFilename=DecAutomation_Studio_Setup_v{#MyAppVersion}
 OutputDir=.\InstallerOutput
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -31,10 +31,10 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 MinVersion=10.0
-UninstallDisplayName=ProAutomation Studio v{#MyAppVersion}
+UninstallDisplayName=DecAutomation Studio v{#MyAppVersion}
 ; App icon (generated from Dec Group logo PNG)
 SetupIconFile=Images\app_icon.ico
-UninstallDisplayIcon={app}\ProAutomation Studio.exe
+UninstallDisplayIcon={app}\DecAutomation Studio.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -46,17 +46,17 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Bundle everything PyInstaller produced
-Source: "dist\ProAutomationApp\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\DecAutomationApp\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Start Menu
-Name: "{group}\ProAutomation Studio";                          Filename: "{app}\ProAutomation Studio.exe"; IconFilename: "{app}\_internal\Images\app_icon.ico"
-Name: "{group}\{cm:UninstallProgram,ProAutomation Studio}";    Filename: "{uninstallexe}"
+Name: "{group}\DecAutomation Studio";                          Filename: "{app}\DecAutomation Studio.exe"; IconFilename: "{app}\_internal\Images\app_icon.ico"
+Name: "{group}\{cm:UninstallProgram,DecAutomation Studio}";    Filename: "{uninstallexe}"
 ; Desktop
-Name: "{autodesktop}\ProAutomation Studio"; Filename: "{app}\ProAutomation Studio.exe"; IconFilename: "{app}\_internal\Images\app_icon.ico"; Tasks: desktopicon
+Name: "{autodesktop}\DecAutomation Studio"; Filename: "{app}\DecAutomation Studio.exe"; IconFilename: "{app}\_internal\Images\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ProAutomation Studio.exe"; Description: "{cm:LaunchProgram,ProAutomation Studio}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\DecAutomation Studio.exe"; Description: "{cm:LaunchProgram,DecAutomation Studio}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\external\automation_data.db"

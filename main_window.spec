@@ -1,6 +1,6 @@
 # main_window.spec
 #
-# PyInstaller spec file for ProAutomation Studio.
+# PyInstaller spec file for DecAutomation Studio.
 # Bundles the full application with all data files, images, DLLs, and
 # the external/ package resources so it runs on PCs without Python,
 # TwinCAT, or any other runtime pre-installed.
@@ -127,7 +127,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ProAutomation Studio',         # executable name
+    name='DecAutomation Studio',         # executable name
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -149,5 +149,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ProAutomationApp',             # output folder: dist/ProAutomationApp/
+    name='DecAutomationApp',             # output folder: dist/DecAutomationApp/
 )

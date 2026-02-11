@@ -1,6 +1,6 @@
 @echo off
 REM ==========================================================================
-REM  Build script for ProAutomation Studio installer
+REM  Build script for DecAutomation Studio installer
 REM
 REM  Usage:
 REM    build_installer.bat              Build app + installer
@@ -9,7 +9,7 @@ REM
 REM  Auto-versioning:
 REM    - Reads version from version.txt (e.g. 1.0.0)
 REM    - On successful build, bumps the build number (1.0.0 -> 1.0.1)
-REM    - Installer is named ProAutomation_Studio_Setup_vX.Y.Z.exe
+REM    - Installer is named DecAutomation_Studio_Setup_vX.Y.Z.exe
 REM
 REM  Prerequisites:
 REM    - .venv with all dependencies + pyinstaller + Pillow
@@ -24,7 +24,7 @@ if "%~1"=="--install" set INSTALL_DEPS=1
 
 echo.
 echo ===================================================
-echo   ProAutomation Studio - Build Pipeline
+echo   DecAutomation Studio - Build Pipeline
 echo ===================================================
 echo.
 
@@ -81,10 +81,10 @@ echo.
 
 REM Verify critical files
 set MISSING=0
-if not exist "dist\ProAutomationApp\ProAutomation Studio.exe" echo [WARN] Missing: ProAutomation Studio.exe & set MISSING=1
-if not exist "dist\ProAutomationApp\_internal\snap7.dll" echo [WARN] Missing: _internal\snap7.dll & set MISSING=1
-if not exist "dist\ProAutomationApp\_internal\external\exchange_variables.csv" echo [WARN] Missing: _internal\external\exchange_variables.csv & set MISSING=1
-if not exist "dist\ProAutomationApp\_internal\Images\app_icon.ico" echo [WARN] Missing: _internal\Images\app_icon.ico & set MISSING=1
+if not exist "dist\DecAutomationApp\DecAutomation Studio.exe" echo [WARN] Missing: DecAutomation Studio.exe & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\snap7.dll" echo [WARN] Missing: _internal\snap7.dll & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\external\exchange_variables.csv" echo [WARN] Missing: _internal\external\exchange_variables.csv & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\Images\app_icon.ico" echo [WARN] Missing: _internal\Images\app_icon.ico & set MISSING=1
 if %MISSING%==0 echo [OK] All critical files verified in bundle.
 echo.
 
@@ -112,7 +112,7 @@ echo      Version bumped: %APP_VERSION% -- next build will be %NEW_VERSION%
 echo.
 echo ===================================================
 echo   BUILD COMPLETE!  v%APP_VERSION%
-echo   Installer: InstallerOutput\ProAutomation_Studio_Setup_v%APP_VERSION%.exe
+echo   Installer: InstallerOutput\DecAutomation_Studio_Setup_v%APP_VERSION%.exe
 echo ===================================================
 goto :DONE
 
@@ -154,7 +154,7 @@ echo        Install Inno Setup 6 from: https://jrsoftware.org/isdl.php
 echo.
 echo ===================================================
 echo   PyInstaller BUILD COMPLETE -- but no installer created.
-echo   Run the app from: dist\ProAutomationApp\ProAutomation Studio.exe
+echo   Run the app from: dist\DecAutomationApp\DecAutomation Studio.exe
 echo ===================================================
 
 :DONE

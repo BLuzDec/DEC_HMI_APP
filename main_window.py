@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton,
                                QInputDialog, QMenuBar, QSizeGrip, QSizePolicy)
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime, QPoint
-from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QAction, QActionGroup
 import pyqtgraph as pg
 from collections import deque
 import numpy as np
@@ -1013,6 +1013,8 @@ class DynamicPlotWidget(QWidget):
         self.buffers_x = {}
         self.buffers_x_discrete = deque(maxlen=buffer_size)  # one x per "row" when discrete index is linked
         self.buffer_timestamps = deque(maxlen=buffer_size)  # Store actual timestamps for each data point
+        self.buffer_x_change_timestamps = deque(maxlen=buffer_size)  # Timestamp when X variable changed (discrete/variable X)
+        self.buffer_x_snapshots = deque(maxlen=buffer_size)  # Snapshot of Y+recipe values when X changed (discrete/variable X)
         self.buffer_size = buffer_size
         self.p2 = None
         self.colors = ['#00E676', '#2979FF', '#FF1744', '#FFEA00', '#AA00FF', '#00B0FF', '#FF9100']
@@ -1423,6 +1425,46 @@ class DynamicPlotWidget(QWidget):
         updateViews()
         p1.vb.sigResized.connect(updateViews)
 
+    def apply_background_theme(self, mode="dark"):
+        """Apply dark or light background theme to the plot and header elements. mode is 'dark' or 'light'."""
+        if mode == "light":
+            bg = "#ffffff"
+            axis_pen = "#555"
+            text_pen = "#333"
+            grid_alpha = 0.25
+            header_fg = "#555"
+            btn_border = "#999"
+            btn_hover = "#ddd"
+        else:
+            bg = "#1e1e1e"
+            axis_pen = "#888"
+            text_pen = "#aaa"
+            grid_alpha = 0.2
+            header_fg = "#888"
+            btn_border = "#444"
+            btn_hover = "#3e3e42"
+        self.plot_widget.setBackground(bg)
+        self.plot_widget.showGrid(x=True, y=True, alpha=grid_alpha)
+        self.plot_widget.getAxis("left").setPen(axis_pen)
+        self.plot_widget.getAxis("bottom").setPen(axis_pen)
+        self.plot_widget.getAxis("left").setTextPen(text_pen)
+        self.plot_widget.getAxis("bottom").setTextPen(text_pen)
+        if self.p2 is not None:
+            self.plot_widget.getAxis("right").setPen(axis_pen)
+            self.plot_widget.getAxis("right").setTextPen(text_pen)
+        # Header elements
+        if hasattr(self, "time_display_label"):
+            self.time_display_label.setStyleSheet(f"color: {header_fg}; font-size: 11px; margin-right: 10px;")
+        _btn_hover_fg = "#333" if mode == "light" else "#e8e8e8"
+        _btn_style = f"QPushButton {{ background-color: transparent; color: {header_fg}; border: 1px solid {btn_border}; border-radius: 4px; }} QPushButton:hover {{ background-color: {btn_hover}; color: {_btn_hover_fg}; }}"
+        _btn_follow_style = _btn_style + " QPushButton:checked { background-color: #1a6fa5; color: white; border-color: #1a6fa5; }"
+        if hasattr(self, "btn_settings") and self.btn_settings:
+            self.btn_settings.setStyleSheet(_btn_style)
+        if hasattr(self, "btn_follow_x") and self.btn_follow_x:
+            self.btn_follow_x.setStyleSheet(_btn_follow_style)
+        if hasattr(self, "btn_export_csv") and self.btn_export_csv:
+            self.btn_export_csv.setStyleSheet(_btn_style)
+
     def get_display_title(self):
         """Return the graph title to show (custom if set, else default)."""
         return (self.graph_title or "").strip() or self.graph_default_title
@@ -1455,6 +1497,10 @@ class DynamicPlotWidget(QWidget):
             for var in self.buffers_x:
                 self.buffers_x[var] = deque(list(self.buffers_x[var])[-new_size:], maxlen=new_size)
         self.buffers_x_discrete = deque(list(self.buffers_x_discrete)[-new_size:], maxlen=new_size)
+        if hasattr(self, "buffer_x_change_timestamps"):
+            self.buffer_x_change_timestamps = deque(list(self.buffer_x_change_timestamps)[-new_size:], maxlen=new_size)
+        if hasattr(self, "buffer_x_snapshots"):
+            self.buffer_x_snapshots = deque(list(self.buffer_x_snapshots)[-new_size:], maxlen=new_size)
         self.buffer_size = new_size
 
     def _add_variable(self, var, color, plot_item):
@@ -1581,205 +1627,201 @@ class DynamicPlotWidget(QWidget):
             import traceback
             traceback.print_exc()
 
-    def export_graph_data_to_csv(self):
+    def _notify_export_success(self, message):
+        """Show export success (toast on main window if available, else QMessageBox)."""
+        w = self.window()
+        while w and not hasattr(w, "_show_toast"):
+            w = w.parent() if hasattr(w, "parent") and callable(w.parent) else None
+        if w and hasattr(w, "_show_toast"):
+            w._show_toast(message)
+        else:
+            QMessageBox.information(self, "Export", message)
+
+    def export_graph_data_to_csv(self, path=None):
         """Export current graph buffer data to CSV with semicolon separator.
         
-        Includes:
-        - Index column
-        - Timestamp column (for time-based: actual timestamps or fixed interval)
-        - X-axis variable column (for XY plots or variable-based X)
-        - Y variable columns
-        - Limit High/Low columns (if enabled)
+        - Time-based X: every timestamp
+        - Discrete/variable X: only rows when X changed (one per dose/etc), with Y and recipe at that moment
+        - XY plot: only rows when X variable changed
+        
+        If path is given, save directly. Otherwise show file dialog.
+        Returns True if export succeeded, False otherwise.
         """
-        # Build rows: common length across all variable buffers
-        buffers = [list(self.buffers_y.get(v, [])) for v in self.variables]
-        if not buffers:
-            QMessageBox.warning(self, "No data", "No data to export.")
-            return
-        n = max(len(b) for b in buffers)
-        if n == 0:
-            QMessageBox.warning(self, "No data", "No data to export.")
-            return
-        
-        # For time-based plots, ask user about timestamp format
-        use_actual_timestamps = True
-        fixed_interval_ms = None
-        
-        if not self.is_xy_plot:
-            # Show dialog to choose timestamp option
-            dialog = QDialog(self)
-            dialog.setWindowTitle("CSV Export - Timestamp Options")
-            dialog.setModal(True)
-            dialog.resize(350, 180)
-            dialog.setStyleSheet("background-color: #2b2b2b; color: white;")
-            
-            layout = QVBoxLayout(dialog)
-            layout.addWidget(QLabel("Choose timestamp format for X-axis:"))
-            
-            radio_actual = QRadioButton("Actual timestamps (when signal was received)")
-            radio_actual.setChecked(True)
-            radio_fixed = QRadioButton("Fixed interval:")
-            
-            interval_layout = QHBoxLayout()
-            interval_spin = QSpinBox()
-            interval_spin.setRange(1, 10000)
-            interval_spin.setValue(int(self.comm_speed * 1000))  # Default to comm speed in ms
-            interval_spin.setSuffix(" ms")
-            interval_spin.setEnabled(False)
-            interval_layout.addWidget(interval_spin)
-            interval_layout.addStretch()
-            
-            radio_fixed.toggled.connect(lambda checked: interval_spin.setEnabled(checked))
-            
-            layout.addWidget(radio_actual)
-            layout.addWidget(radio_fixed)
-            layout.addLayout(interval_layout)
-            layout.addSpacing(10)
-            
-            btn_layout = QHBoxLayout()
-            btn_ok = QPushButton("Export")
-            btn_cancel = QPushButton("Cancel")
-            btn_ok.clicked.connect(dialog.accept)
-            btn_cancel.clicked.connect(dialog.reject)
-            btn_layout.addStretch()
-            btn_layout.addWidget(btn_ok)
-            btn_layout.addWidget(btn_cancel)
-            layout.addLayout(btn_layout)
-            
-            if dialog.exec_() != QDialog.Accepted:
+        # Determine export mode and row indices
+        is_discrete_linked = (self.is_discrete_index and getattr(self, "discrete_index_linked_variable", None))
+        timestamps = list(self.buffer_timestamps) if hasattr(self, "buffer_timestamps") else []
+        recipe_params = getattr(self, "recipe_params", []) or []
+
+        if is_discrete_linked:
+            # Discrete/variable X: one row per X change
+            x_list = list(self.buffers_x_discrete)
+            n = len(x_list)
+            if n == 0:
+                QMessageBox.warning(self, "No data", "No data to export (no X-axis changes yet).")
                 return
-            
-            use_actual_timestamps = radio_actual.isChecked()
-            if radio_fixed.isChecked():
-                fixed_interval_ms = interval_spin.value()
-        
-        # Get save path
-        path, _ = QFileDialog.getSaveFileName(self, "Export graph data", "", "CSV (*.csv)")
+            x_change_ts = list(getattr(self, "buffer_x_change_timestamps", []))
+            x_snapshots = list(getattr(self, "buffer_x_snapshots", []))
+            row_indices = list(range(n))  # All rows (each is an X change)
+        elif self.is_xy_plot:
+            # XY: only rows where X changed (x values stored per Y variable, same for all)
+            x_src = self.buffers_x.get(self.variables[0], []) if self.variables else []
+            x_data = list(x_src)
+            n_raw = len(x_data)
+            if n_raw == 0:
+                QMessageBox.warning(self, "No data", "No data to export.")
+                return
+            row_indices = []
+            for i in range(n_raw):
+                if i == 0 or (i < len(x_data) and x_data[i] != x_data[i - 1]):
+                    row_indices.append(i)
+            n = len(row_indices)
+            if n == 0:
+                QMessageBox.warning(self, "No data", "No data to export.")
+                return
+        else:
+            # Time-based: every timestamp
+            buffers = [list(self.buffers_y.get(v, [])) for v in self.variables]
+            if not buffers:
+                QMessageBox.warning(self, "No data", "No data to export.")
+                return
+            n = max(len(b) for b in buffers)
+            if n == 0:
+                QMessageBox.warning(self, "No data", "No data to export.")
+                return
+            row_indices = list(range(n))
+
+            use_actual_timestamps = True
+            fixed_interval_ms = None
+            if not self.is_xy_plot and path is None:
+                dialog = QDialog(self)
+                dialog.setWindowTitle("CSV Export - Timestamp Options")
+                dialog.setModal(True)
+                dialog.resize(350, 180)
+                dialog.setStyleSheet("background-color: #2b2b2b; color: white;")
+                layout = QVBoxLayout(dialog)
+                layout.addWidget(QLabel("Choose timestamp format for X-axis:"))
+                radio_actual = QRadioButton("Actual timestamps (when signal was received)")
+                radio_actual.setChecked(True)
+                radio_fixed = QRadioButton("Fixed interval:")
+                interval_layout = QHBoxLayout()
+                interval_spin = QSpinBox()
+                interval_spin.setRange(1, 10000)
+                interval_spin.setValue(int(self.comm_speed * 1000))
+                interval_spin.setSuffix(" ms")
+                interval_spin.setEnabled(False)
+                interval_layout.addWidget(interval_spin)
+                interval_layout.addStretch()
+                radio_fixed.toggled.connect(lambda checked: interval_spin.setEnabled(checked))
+                layout.addWidget(radio_actual)
+                layout.addWidget(radio_fixed)
+                layout.addLayout(interval_layout)
+                layout.addSpacing(10)
+                btn_layout = QHBoxLayout()
+                btn_ok = QPushButton("Export")
+                btn_cancel = QPushButton("Cancel")
+                btn_ok.clicked.connect(dialog.accept)
+                btn_cancel.clicked.connect(dialog.reject)
+                btn_layout.addStretch()
+                btn_layout.addWidget(btn_ok)
+                btn_layout.addWidget(btn_cancel)
+                layout.addLayout(btn_layout)
+                if dialog.exec() != QDialog.Accepted:
+                    return None
+                use_actual_timestamps = radio_actual.isChecked()
+                fixed_interval_ms = interval_spin.value() if radio_fixed.isChecked() else None
+
+        user_initiated = path is None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Export graph data", "", "CSV (*.csv)")
         if not path:
-            return
-        
+            return None
+
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
-                # Build header
-                header_cols = ["Index"]
-                
-                # Add timestamp column for time-based graphs
-                if not self.is_xy_plot:
-                    header_cols.append("Timestamp")
-                
-                # Add X-axis variable for XY plots or discrete index with linked variable
+                header_cols = ["Index", "Timestamp"]
                 if self.is_xy_plot:
                     header_cols.append(self.x_axis_source)
-                elif self.is_discrete_index and self.discrete_index_linked_variable:
+                elif is_discrete_linked:
                     header_cols.append(self.discrete_index_linked_variable)
-                
-                # Add Y variables
                 header_cols.extend(self.variables)
-                
-                # Add Limit High column if enabled
+                header_cols.extend(recipe_params)
                 if self.limit_high_settings.get("enabled", False):
-                    if self.limit_high_settings.get("type") == "variable":
-                        header_cols.append(f"LimitHigh ({self.limit_high_settings.get('variable', 'N/A')})")
-                    else:
-                        header_cols.append("LimitHigh")
-                
-                # Add Limit Low column if enabled
+                    header_cols.append("LimitHigh" if self.limit_high_settings.get("type") != "variable" else f"LimitHigh ({self.limit_high_settings.get('variable', 'N/A')})")
                 if self.limit_low_settings.get("enabled", False):
-                    if self.limit_low_settings.get("type") == "variable":
-                        header_cols.append(f"LimitLow ({self.limit_low_settings.get('variable', 'N/A')})")
-                    else:
-                        header_cols.append("LimitLow")
-                
+                    header_cols.append("LimitLow" if self.limit_low_settings.get("type") != "variable" else f"LimitLow ({self.limit_low_settings.get('variable', 'N/A')})")
                 f.write(";".join(header_cols) + "\n")
-                
-                # Prepare X-axis data
-                x_data = None
-                if self.is_xy_plot:
-                    x_data = list(self.buffers_x.get(self.x_axis_source, []))
-                elif self.is_discrete_index:
-                    x_data = list(self.buffers_x_discrete)
-                
-                # Prepare timestamp data
-                timestamps = list(self.buffer_timestamps) if hasattr(self, 'buffer_timestamps') else []
-                
-                # Prepare limit data (get from latest_values_cache for variable-based limits)
-                limit_high_values = []
-                limit_low_values = []
-                
-                if self.limit_high_settings.get("enabled", False):
-                    if self.limit_high_settings.get("type") == "fixed":
-                        limit_high_values = [self.limit_high_settings.get("value", "")] * n
+
+                max_idx = max(row_indices) + 1 if row_indices else 0
+                limit_high_vals = self._export_limit_values(max_idx, "high") if max_idx else []
+                limit_low_vals = self._export_limit_values(max_idx, "low") if max_idx else []
+
+                for row_idx, orig_i in enumerate(row_indices, start=1):
+                    row = [str(row_idx)]
+                    ts_str = ""
+                    if is_discrete_linked:
+                        if orig_i < len(x_change_ts) and x_change_ts[orig_i]:
+                            ts_str = x_change_ts[orig_i].strftime("%M:%S.") + f"{x_change_ts[orig_i].microsecond // 1000:03d}"
+                    elif self.is_xy_plot:
+                        if orig_i < len(timestamps) and timestamps[orig_i]:
+                            ts_str = timestamps[orig_i].strftime("%M:%S.") + f"{timestamps[orig_i].microsecond // 1000:03d}"
                     else:
-                        # Variable-based: try to get from buffers_y if it's a tracked variable
-                        var = self.limit_high_settings.get("variable", "")
-                        if var in self.buffers_y:
-                            limit_high_values = list(self.buffers_y.get(var, []))
-                        else:
-                            # Use current value for all rows (variable not in this graph's buffers)
-                            current_val = self.latest_values_cache.get(var, "")
-                            limit_high_values = [current_val] * n
-                
-                if self.limit_low_settings.get("enabled", False):
-                    if self.limit_low_settings.get("type") == "fixed":
-                        limit_low_values = [self.limit_low_settings.get("value", "")] * n
-                    else:
-                        var = self.limit_low_settings.get("variable", "")
-                        if var in self.buffers_y:
-                            limit_low_values = list(self.buffers_y.get(var, []))
-                        else:
-                            current_val = self.latest_values_cache.get(var, "")
-                            limit_low_values = [current_val] * n
-                
-                # Write data rows
-                for i in range(n):
-                    row = [str(i + 1)]  # Index starts at 1
-                    
-                    # Add timestamp for time-based graphs
-                    if not self.is_xy_plot:
-                        if use_actual_timestamps and i < len(timestamps):
-                            # Format: mm:ss.milliseconds (e.g., 13:01.100)
-                            ts = timestamps[i]
-                            ts_str = ts.strftime("%M:%S.") + f"{ts.microsecond // 1000:03d}"
-                            row.append(ts_str)
+                        if use_actual_timestamps and orig_i < len(timestamps) and timestamps[orig_i]:
+                            ts_str = timestamps[orig_i].strftime("%M:%S.") + f"{timestamps[orig_i].microsecond // 1000:03d}"
                         elif fixed_interval_ms is not None:
-                            # Calculate timestamp based on fixed interval from start
-                            total_ms = i * fixed_interval_ms
-                            minutes = (total_ms // 60000) % 60
-                            seconds = (total_ms // 1000) % 60
-                            ms = total_ms % 1000
-                            row.append(f"{minutes:02d}:{seconds:02d}.{ms:03d}")
-                        else:
-                            row.append("")
-                    
-                    # Add X-axis value for XY plots or discrete index
-                    if self.is_xy_plot or (self.is_discrete_index and self.discrete_index_linked_variable):
-                        if x_data and i < len(x_data):
-                            row.append(str(x_data[i]) if x_data[i] is not None else "")
-                        else:
-                            row.append("")
-                    
-                    # Add Y variable values
-                    for v in self.variables:
-                        buf = self.buffers_y.get(v, [])
-                        val = buf[i] if i < len(buf) else ""
-                        row.append(str(val) if val is not None and val != "" else "")
-                    
-                    # Add Limit High value
-                    if self.limit_high_settings.get("enabled", False):
-                        val = limit_high_values[i] if i < len(limit_high_values) else ""
-                        row.append(str(val) if val is not None and val != "" else "")
-                    
-                    # Add Limit Low value
-                    if self.limit_low_settings.get("enabled", False):
-                        val = limit_low_values[i] if i < len(limit_low_values) else ""
-                        row.append(str(val) if val is not None and val != "" else "")
-                    
+                            total_ms = orig_i * fixed_interval_ms
+                            ts_str = f"{(total_ms // 60000) % 60:02d}:{(total_ms // 1000) % 60:02d}.{total_ms % 1000:03d}"
+                    row.append(ts_str)
+
+                    if self.is_xy_plot:
+                        x_data_xy = list(self.buffers_x.get(self.variables[0], [])) if self.variables else []
+                        row.append(str(x_data_xy[orig_i]) if orig_i < len(x_data_xy) and x_data_xy[orig_i] is not None else "")
+                    elif is_discrete_linked:
+                        x_list = list(self.buffers_x_discrete)
+                        row.append(str(x_list[orig_i]) if orig_i < len(x_list) and x_list[orig_i] is not None else "")
+
+                    if is_discrete_linked and orig_i < len(x_snapshots):
+                        snap = x_snapshots[orig_i]
+                        for v in self.variables:
+                            val = snap.get(v)
+                            row.append(str(val) if val is not None and val != "" else "")
+                        for p in recipe_params:
+                            val = snap.get(p)
+                            row.append(str(val) if val is not None and val != "" else "")
+                    else:
+                        for v in self.variables:
+                            buf = self.buffers_y.get(v, [])
+                            val = buf[orig_i] if orig_i < len(buf) else ""
+                            row.append(str(val) if val is not None and val != "" else "")
+                        for p in recipe_params:
+                            val = self.latest_values_cache.get(p)
+                            row.append(str(val) if val is not None and val != "" else "")
+
+                    if self.limit_high_settings.get("enabled", False) and orig_i < len(limit_high_vals):
+                        row.append(str(limit_high_vals[orig_i]) if limit_high_vals[orig_i] not in (None, "") else "")
+                    if self.limit_low_settings.get("enabled", False) and orig_i < len(limit_low_vals):
+                        row.append(str(limit_low_vals[orig_i]) if limit_low_vals[orig_i] not in (None, "") else "")
                     f.write(";".join(row) + "\n")
-            
-            self._show_toast(f"Exported to {os.path.basename(path)}")
+            if user_initiated:
+                self._notify_export_success(f"Exported to {os.path.basename(path)}")
+            return True
         except Exception as e:
             logging.warning(f"Export CSV failed: {e}")
-            QMessageBox.warning(self, "Export failed", str(e))
+            if user_initiated:
+                QMessageBox.warning(self, "Export failed", str(e))
+            return False
+
+    def _export_limit_values(self, n, which):
+        """Helper to build limit value list for export."""
+        settings = self.limit_high_settings if which == "high" else self.limit_low_settings
+        if not settings.get("enabled", False):
+            return []
+        if settings.get("type") == "fixed":
+            return [settings.get("value", "")] * n
+        var = settings.get("variable", "")
+        if var in self.buffers_y:
+            buf = list(self.buffers_y.get(var, []))
+            return (buf + [self.latest_values_cache.get(var, "")] * n)[:n]
+        return [self.latest_values_cache.get(var, "")] * n
 
     def _apply_aligned_dual_y_range(self):
         """When dual Y has same min/max, set both axes to the same range so series overlap for comparison."""
@@ -1865,6 +1907,10 @@ class DynamicPlotWidget(QWidget):
                 self._discrete_index_last_linked_value = new_val
                 self._discrete_index_counter += 1
                 self.buffers_x_discrete.append(self._discrete_index_counter)
+                self.buffer_x_change_timestamps.append(datetime.now())
+                # Snapshot Y and recipe values at the moment X changed (for CSV export)
+                snap = dict(self.latest_values_cache) if self.latest_values_cache else {}
+                self.buffer_x_snapshots.append(snap)
             return
         if var_name not in self.variables:
             return
@@ -2366,7 +2412,7 @@ class _GraphAreaWithBackground(QWidget):
 
 
 class _CustomTitleBar(QWidget):
-    """Custom dark title bar that embeds the QMenuBar alongside the window title and controls."""
+    """Custom title bar that embeds the QMenuBar alongside the window title and controls."""
 
     def __init__(self, parent: QMainWindow):
         super().__init__(parent)
@@ -2481,6 +2527,26 @@ class _CustomTitleBar(QWidget):
         if event.button() == Qt.LeftButton:
             self._toggle_maximize()
 
+    def apply_theme(self, mode="dark"):
+        """Apply dark or light theme to title bar and menu."""
+        if mode == "light":
+            bg = "#f0f0f0"
+            fg = "#333333"
+            menu_hover = "#d0d0d0"
+            menu_selected_fg = "#333333"
+        else:
+            bg = "#1e1e1e"
+            fg = "#cccccc"
+            menu_hover = "#3e3e42"
+            menu_selected_fg = "#ffffff"
+        self.setStyleSheet(f"background-color: {bg};")
+        self.menu_bar.setStyleSheet(f"""
+            QMenuBar {{ background-color: transparent; color: {fg}; border: none; font-size: 12px; }}
+            QMenuBar::item {{ background-color: transparent; padding: 6px 10px; border-radius: 3px; }}
+            QMenuBar::item:selected {{ background-color: {menu_hover}; color: {menu_selected_fg}; }}
+            QMenuBar::item:pressed {{ background-color: #007ACC; color: white; }}
+        """)
+
 
 class MainWindow(QMainWindow):
     data_signal = Signal(str, object)
@@ -2488,7 +2554,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dec ProAutomation Studio")
+        self.setWindowTitle("DecAutomation Studio")
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.resize(1280, 800)
         _icon = _app_icon()
@@ -2497,10 +2563,17 @@ class MainWindow(QMainWindow):
         self.latest_values = {}
         self.all_variables = []
         self.variable_metadata = {}  # Store min/max from CSV files
-        self.recipe_params = []  # Will be loaded from recipe_variables.csv
+        self.recipe_params = []  # Will be loaded from recipe_variables CSV
         _ext = os.path.join(os.path.dirname(__file__), "external")
-        self.exchange_variables_path = os.path.join(_ext, "exchange_variables.csv")
-        self.recipe_variables_path = os.path.join(_ext, "recipe_variables.csv")
+        # Auto-discover DB-named CSVs (e.g. exchange_variables_DB20.csv), fall back to plain names
+        try:
+            from external.variable_loader import discover_csv_files
+            _disc_ex, _disc_rec = discover_csv_files(_ext)
+            self.exchange_variables_path = _disc_ex or os.path.join(_ext, "exchange_variables.csv")
+            self.recipe_variables_path = _disc_rec or os.path.join(_ext, "recipe_variables.csv")
+        except Exception:
+            self.exchange_variables_path = os.path.join(_ext, "exchange_variables.csv")
+            self.recipe_variables_path = os.path.join(_ext, "recipe_variables.csv")
         self.apply_theme()
 
         # Custom title bar with embedded menu
@@ -2508,9 +2581,10 @@ class MainWindow(QMainWindow):
         self._create_menu_bar()
 
         # Wrap everything in a vertical layout: title bar on top, content below
-        _root = QWidget()
-        _root.setStyleSheet("QWidget#_rootWidget { border: 1px solid #3e3e42; }")
-        _root.setObjectName("_rootWidget")
+        self._root_widget = QWidget()
+        self._root_widget.setStyleSheet("QWidget#_rootWidget { border: 1px solid #3e3e42; }")
+        self._root_widget.setObjectName("_rootWidget")
+        _root = self._root_widget
         _root_layout = QVBoxLayout(_root)
         _root_layout.setContentsMargins(1, 0, 1, 1)  # thin border for resize grip visibility
         _root_layout.setSpacing(0)
@@ -3077,7 +3151,7 @@ class MainWindow(QMainWindow):
         self.plc_thread = None
         self.ads_thread = None
         self.simulator_thread = None
-        self.load_variables()
+        self._during_init = True
 
         self.connect_btn.clicked.connect(self.start_plc_thread)
         self.disconnect_btn.clicked.connect(self.disconnect_plc)
@@ -3088,6 +3162,8 @@ class MainWindow(QMainWindow):
         self.on_data_mode_changed(self.data_mode_combo.currentText())
         self._update_variable_path_display()
         self._load_last_config()
+        self._during_init = False
+        self._apply_graph_background_theme()
 
         # Subtle RAM usage indicator (bottom-left, almost hidden)
         self.ram_label = QLabel("", self)
@@ -3117,7 +3193,7 @@ class MainWindow(QMainWindow):
 
     def _load_last_config(self):
         """Restore last saved connection config (device type, IPs, variable paths) from cache."""
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         device = s.value("device_type")
         if device and device in ("Snap7", "ADS", "Simulation"):
             idx = self.device_type_combo.findText(device)
@@ -3158,7 +3234,7 @@ class MainWindow(QMainWindow):
 
     def _save_last_config(self):
         """Save current connection config so next run shows the latest (e.g. ADS, IPs, variable paths)."""
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         s.setValue("device_type", self.device_type_combo.currentText())
         s.setValue("ip_address", self.ip_input.text().strip())
         s.setValue("pc_ip", self.pc_ip_input.text().strip())
@@ -3370,7 +3446,7 @@ class MainWindow(QMainWindow):
         is_visible = self.connection_details_content.isVisible()
         self.connection_details_content.setVisible(not is_visible)
         self.connection_toggle_btn.setText("▼" if not is_visible else "▲")
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         s.setValue("connection_section_collapsed", is_visible)
         s.sync()
 
@@ -3379,7 +3455,7 @@ class MainWindow(QMainWindow):
         is_visible = self.trigger_content.isVisible()
         self.trigger_content.setVisible(not is_visible)
         self.trigger_toggle_btn.setText("▼" if not is_visible else "▲")
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         s.setValue("trigger_section_collapsed", is_visible)
         s.sync()
 
@@ -3400,7 +3476,8 @@ class MainWindow(QMainWindow):
         else:
             self.online_panel.setVisible(True)
             self.offline_panel.setVisible(False)
-            self.load_variables()
+            if not getattr(self, "_during_init", False):
+                self.load_variables()
 
     def on_device_type_changed(self, device_type):
         """Show/hide address rows and update labels by Client Device Type (Snap7, ADS, Simulation)."""
@@ -4350,6 +4427,26 @@ class MainWindow(QMainWindow):
         view_menu = mb.addMenu("View")
         self._toggle_sidebar_action = view_menu.addAction("Hide Sidebar", self._menu_toggle_sidebar)
         view_menu.addAction("Toggle Comm Info", self.toggle_comm_info)
+        view_menu.addSeparator()
+        # Graph/Analytics background: Dark or Light
+        s = QSettings("DecAutomation", "Studio")
+        self._graph_background_mode = s.value("graph_background_mode", "dark")
+        if self._graph_background_mode not in ("dark", "light"):
+            self._graph_background_mode = "dark"
+        self._bg_group = QActionGroup(self)
+        self._bg_group.setExclusive(True)
+        act_dark = QAction("Dark Background", self)
+        act_dark.setCheckable(True)
+        act_dark.setChecked(self._graph_background_mode == "dark")
+        act_dark.triggered.connect(lambda: self._set_graph_background("dark"))
+        self._bg_group.addAction(act_dark)
+        view_menu.addAction(act_dark)
+        act_light = QAction("Light Background", self)
+        act_light.setCheckable(True)
+        act_light.setChecked(self._graph_background_mode == "light")
+        act_light.triggered.connect(lambda: self._set_graph_background("light"))
+        self._bg_group.addAction(act_light)
+        view_menu.addAction(act_light)
 
         # ── Graphs ──
         graphs_menu = mb.addMenu("Graphs")
@@ -4381,26 +4478,137 @@ class MainWindow(QMainWindow):
             self.sidebar.show()
             self._toggle_sidebar_action.setText("Hide Sidebar")
 
+    def _set_graph_background(self, mode):
+        """Set graph/analytics background to 'dark' or 'light' and apply to all."""
+        self._graph_background_mode = mode
+        s = QSettings("DecAutomation", "Studio")
+        s.setValue("graph_background_mode", mode)
+        s.sync()
+        self._apply_graph_background_theme()
+
+    def _apply_graph_background_theme(self):
+        """Apply current graph background theme to sidebar, title bar, graph area, all graphs, and analytics window."""
+        mode = self._graph_background_mode
+        if mode == "light":
+            area_bg = "#f5f5f5"
+            splitter_handle = "#b0b0b0"
+            sidebar_bg = "#ebeaea"
+            sidebar_fg = "#333333"
+            sidebar_input_bg = "#ffffff"
+            sidebar_input_border = "#bbb"
+            card_bg = "#f0f0f0"
+            card_header_fg = "#444"
+            root_border = "#c0c0c0"
+        else:
+            area_bg = "#1e1e1e"
+            splitter_handle = "#3e3e42"
+            sidebar_bg = "#252526"
+            sidebar_fg = "#e0e0e0"
+            sidebar_input_bg = "#444"
+            sidebar_input_border = "#555"
+            card_bg = "#252526"
+            card_header_fg = "#ccc"
+            root_border = "#3e3e42"
+
+        # Title bar and menu
+        if hasattr(self, "_title_bar") and hasattr(self._title_bar, "apply_theme"):
+            self._title_bar.apply_theme(mode)
+
+        # Root border
+        if hasattr(self, "_root_widget"):
+            self._root_widget.setStyleSheet(f"QWidget#_rootWidget {{ border: 1px solid {root_border}; }}")
+
+        # Sidebar with cascading styles for inputs
+        if hasattr(self, "sidebar"):
+            self.sidebar.setStyleSheet(f"""
+                QWidget {{ background-color: {sidebar_bg}; color: {sidebar_fg}; }}
+                QLabel {{ color: {sidebar_fg}; }}
+                QComboBox, QLineEdit, QSpinBox {{
+                    background-color: {sidebar_input_bg}; color: {sidebar_fg};
+                    border: 1px solid {sidebar_input_border}; padding: 5px;
+                }}
+                QPushButton {{ background-color: {sidebar_input_bg}; color: {sidebar_fg}; border: 1px solid {sidebar_input_border}; }}
+                QPushButton:hover {{ background-color: #e0e0e0; }}
+                QListWidget {{ background-color: {sidebar_input_bg}; color: {sidebar_fg}; border: 1px solid {sidebar_input_border}; }}
+                QListWidget::item:selected {{ background-color: #1a6fa5; color: white; }}
+                QListWidget::item:hover {{ background-color: #e8e8e8; }}
+                QFrame {{ background-color: transparent; border: none; }}
+            """)
+
+        # Keep Connect/Disconnect/Pause buttons with their brand colors (re-apply)
+        if hasattr(self, "connect_btn"):
+            self.connect_btn.setStyleSheet("""
+                QPushButton { background-color: #1a6fa5; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 3px; }
+                QPushButton:hover { background-color: #2580b8; }
+                QPushButton:pressed { background-color: #0d5a8a; }
+            """)
+        if hasattr(self, "disconnect_btn"):
+            self.disconnect_btn.setStyleSheet("""
+                QPushButton { background-color: #6b2d2d; color: #e8e8e8; font-weight: bold; padding: 5px; border: 1px solid #5a2525; border-radius: 3px; }
+                QPushButton:hover { background-color: #7a3535; }
+                QPushButton:pressed { background-color: #5a2020; }
+                QPushButton:disabled { background-color: #3a3a3a; color: #707070; border-color: #2d2d30; }
+            """)
+        if hasattr(self, "pause_btn"):
+            self.pause_btn.setStyleSheet(f"""
+                QPushButton {{ background-color: {"#5a5a5a" if mode == "dark" else "#e0e0e0"}; color: {"#e0e0e0" if mode == "dark" else "#333"}; font-weight: bold; padding: 5px; border: 1px solid {"#3e3e42" if mode == "dark" else "#bbb"}; border-radius: 3px; }}
+                QPushButton:hover {{ background-color: {"#6a6a6a" if mode == "dark" else "#d0d0d0"}; }}
+                QPushButton:disabled {{ background-color: #3a3a3a; color: #707070; }}
+            """)
+
+        # Comm info header
+        if hasattr(self, "comm_info_label"):
+            self.comm_info_label.setStyleSheet(f"font-weight: bold; color: {sidebar_fg}; font-size: 12px;")
+
+        # Graph area and splitter
+        if hasattr(self, "graph_area_widget"):
+            self.graph_area_widget.setStyleSheet(f"background-color: {area_bg};")
+        if hasattr(self, "graph_splitter"):
+            self.graph_splitter.setStyleSheet(f"QSplitter::handle {{ background-color: {splitter_handle}; }}")
+
+        # Graph card containers and their headers
+        if hasattr(self, "graph_splitter"):
+            for i in range(self.graph_splitter.count()):
+                w = self.graph_splitter.widget(i)
+                if w and hasattr(w, "setStyleSheet"):
+                    w.setStyleSheet(f"background-color: {card_bg}; border-radius: 6px;")
+                if w and hasattr(w, "lbl_title") and w.lbl_title:
+                    w.lbl_title.setStyleSheet(f"font-weight: bold; color: {card_header_fg}; font-size: 13px;")
+
+        for graph in getattr(self, "graphs", []):
+            if hasattr(graph, "apply_background_theme"):
+                graph.apply_background_theme(mode)
+
+        if self.analytics_window is not None and self.analytics_window.isVisible():
+            self.analytics_window.apply_background_theme(mode)
+
     def _menu_export_csv(self):
-        """Export graph data to CSV. If only one graph exists, export it directly;
-        otherwise let the user pick which graph to export."""
+        """Export all graph data to CSV files (base_plot1.csv, base_plot2.csv, ...) — same as on close."""
         if not hasattr(self, 'graphs') or not self.graphs:
             self._show_toast("No graphs to export.")
             return
-        if len(self.graphs) == 1:
-            self.graphs[0].export_graph_data_to_csv()
-        else:
-            names = [g.get_display_title() for g in self.graphs]
-            name, ok = QInputDialog.getItem(
-                self, "Export Graph", "Select graph to export:", names, 0, False)
-            if ok and name:
-                idx = names.index(name)
-                self.graphs[idx].export_graph_data_to_csv()
+        base_path, _ = QFileDialog.getSaveFileName(
+            self, "Export graph data (base name)", "graph_export.csv", "CSV (*.csv);;All files (*)"
+        )
+        if not base_path:
+            return
+        base = base_path.rsplit(".", 1)[0] if "." in base_path else base_path
+        exported = 0
+        for i, graph in enumerate(self.graphs, start=1):
+            plot_path = f"{base}_plot{i}.csv"
+            try:
+                if graph.export_graph_data_to_csv(path=plot_path):
+                    exported += 1
+                    logging.info(f"Exported graph {i} to {plot_path}")
+            except Exception as e:
+                logging.warning(f"Export graph {i} failed: {e}")
+        if exported:
+            self._show_toast(f"Exported {exported} graph(s) to CSV")
 
     def _rebuild_config_submenu(self):
         """Rebuild the 'Load Graph Config' submenu from saved configurations."""
         self._config_submenu.clear()
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         configs = s.value("graph_configs", {})
         if not configs or not isinstance(configs, dict):
             action = self._config_submenu.addAction("(no saved configs)")
@@ -4420,7 +4628,7 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         """Show a stylish About dialog for the application."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("About Dec ProAutomation Studio")
+        dlg.setWindowTitle("About DecAutomation Studio")
         dlg.setFixedSize(460, 420)
         dlg.setStyleSheet("""
             QDialog {
@@ -4454,7 +4662,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(icon_label)
 
         # ── App title ──
-        title = QLabel("Dec ProAutomation Studio")
+        title = QLabel("DecAutomation Studio")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("""
             background: transparent;
@@ -4486,7 +4694,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(sep)
 
         # ── Description ──
-        desc = QLabel("PLC monitoring, real-time graph visualization\n& advanced analytics tool.")
+        desc = QLabel("PLC monitoring, real-time graph visualization\n& advanced analytics tool.\n-Siemens, Beckhoff, STM32-")
         desc.setAlignment(Qt.AlignCenter)
         desc.setWordWrap(True)
         desc.setStyleSheet("""
@@ -4615,13 +4823,30 @@ class MainWindow(QMainWindow):
         self.all_variables = []
         self.recipe_params = []
         
-        # Load boolean variables from JSON for trigger dropdown (Snap7)
+        default_ext = os.path.join(os.path.dirname(__file__), "external")
+        exchange_path = self.exchange_variables_path or ""
+        recipe_path = self.recipe_variables_path or ""
+
+        # Regenerate snap7_node_ids.json from the current CSV paths if they have DB<N> in the name
+        try:
+            from external.generate_snap7_config import generate_snap7_config
+            result = generate_snap7_config(
+                directory=default_ext,
+                exchange_csv=exchange_path if exchange_path else None,
+                recipe_csv=recipe_path if recipe_path else None,
+            )
+            if result:
+                print(f"snap7_node_ids.json regenerated from CSV files")
+        except Exception as e:
+            print(f"Config generation skipped: {e}")
+
+        # Load boolean variables from the (now up-to-date) JSON for trigger dropdown (Snap7)
         boolean_vars = []
         try:
-            config_path = os.path.join(os.path.dirname(__file__), "external", "snap7_node_ids.json")
+            config_path = os.path.join(default_ext, "snap7_node_ids.json")
             with open(config_path, 'r') as f:
                 config = json.load(f)
-                node_config = config.get('Node_id_flexpts_S7_1500_snap7', {})
+                node_config = config.get('snap7_variables') or config.get('Node_id_flexpts_S7_1500_snap7', {})
                 # Find all BOOL variables
                 for var_name, node_info in node_config.items():
                     if var_name != 'recipes' and isinstance(node_info, list) and len(node_info) >= 3:
@@ -4639,14 +4864,9 @@ class MainWindow(QMainWindow):
             self.trigger_var_combo.setEnabled(False)
         
         # Load exchange and recipe variables via variable_loader (groups, Name, Unit)
-        default_ext = os.path.join(os.path.dirname(__file__), "external")
-        exchange_path = self.exchange_variables_path or os.path.join(default_ext, "exchange_variables.csv")
-        recipe_path = self.recipe_variables_path or os.path.join(default_ext, "recipe_variables.csv")
         loaded = load_exchange_and_recipes(
-            exchange_path=exchange_path,
-            recipe_path=recipe_path,
-            default_exchange_dir=os.path.join(default_ext, "exchange_variables.csv"),
-            default_recipe_dir=os.path.join(default_ext, "recipe_variables.csv"),
+            exchange_path=exchange_path if exchange_path else None,
+            recipe_path=recipe_path if recipe_path else None,
         )
         self.all_variables = loaded.all_variables
         self.variable_metadata = loaded.variable_metadata
@@ -4756,6 +4976,7 @@ class MainWindow(QMainWindow):
                 x_data_for_static = [row[0] for row in result]
             y_series = {v: [row[col_index[v]] for row in result] for v in var_names if v in col_index}
             new_graph.set_static_data(x_data_for_static, y_series)
+            new_graph.apply_background_theme(getattr(self, "_graph_background_mode", "dark"))
             return
 
         # Online: use buffer_size and other options from GraphConfigDialog
@@ -4799,6 +5020,7 @@ class MainWindow(QMainWindow):
         lbl_title.setText(new_graph.get_display_title())
         self.graph_splitter.addWidget(container)
         self.graphs.append(new_graph)
+        new_graph.apply_background_theme(getattr(self, "_graph_background_mode", "dark"))
         btn_close.clicked.connect(lambda: self.remove_graph(container, new_graph))
 
     def remove_graph(self, container, graph_widget):
@@ -4878,10 +5100,12 @@ class MainWindow(QMainWindow):
         if self.analytics_window is None or not self.analytics_window.isVisible():
             self.analytics_window = AnalyticsWindow(parent=None)
             self.analytics_window.set_graphs(self.graphs, self.variable_metadata)
+            self.analytics_window.apply_background_theme(getattr(self, "_graph_background_mode", "dark"))
             self.analytics_window.show()
         else:
             # Window exists and is visible - bring to front and refresh
             self.analytics_window.set_graphs(self.graphs, self.variable_metadata)
+            self.analytics_window.apply_background_theme(getattr(self, "_graph_background_mode", "dark"))
             self.analytics_window.raise_()
             self.analytics_window.activateWindow()
 
@@ -4889,7 +5113,7 @@ class MainWindow(QMainWindow):
         """Refresh the dropdown list of saved graph configurations."""
         self.config_load_combo.clear()
         self.config_load_combo.addItem("-- Select config --", "")
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         configs = s.value("graph_configs", {})
         if isinstance(configs, dict):
             for name in sorted(configs.keys()):
@@ -4928,7 +5152,7 @@ class MainWindow(QMainWindow):
             graph_configs.append(config)
         
         # Save to QSettings
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         all_configs = s.value("graph_configs", {})
         if not isinstance(all_configs, dict):
             all_configs = {}
@@ -4951,7 +5175,7 @@ class MainWindow(QMainWindow):
             self._show_toast("Select a configuration to load.")
             return
         
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         all_configs = s.value("graph_configs", {})
         if not isinstance(all_configs, dict) or name not in all_configs:
             QMessageBox.warning(self, "Not Found", f"Configuration '{name}' not found.")
@@ -5058,9 +5282,10 @@ class MainWindow(QMainWindow):
             lbl_title.setText(new_graph.get_display_title())
             self.graph_splitter.addWidget(container)
             self.graphs.append(new_graph)
+            new_graph.apply_background_theme(getattr(self, "_graph_background_mode", "dark"))
             btn_close.clicked.connect(lambda checked=False, c=container, g=new_graph: self.remove_graph(c, g))
             loaded_count += 1
-        
+
         if loaded_count > 0:
             self._show_toast(f"Loaded {loaded_count} graph(s) from '{name}'.")
         else:
@@ -5081,7 +5306,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
         
-        s = QSettings("ProAutomation", "Studio")
+        s = QSettings("DecAutomation", "Studio")
         all_configs = s.value("graph_configs", {})
         if isinstance(all_configs, dict) and name in all_configs:
             del all_configs[name]
@@ -5228,36 +5453,35 @@ class MainWindow(QMainWindow):
             import ctypes.wintypes
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == 0x0084:  # WM_NCHITTEST
-                x = msg.lParam & 0xFFFF
-                y = (msg.lParam >> 16) & 0xFFFF
-                # Convert signed 16-bit
-                if x >= 0x8000:
-                    x -= 0x10000
-                if y >= 0x8000:
-                    y -= 0x10000
-                geo = self.frameGeometry()
+                # Cursor position in physical screen pixels (signed 16-bit)
+                x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                # Use Win32 GetWindowRect so coordinates match lParam's space
+                # (avoids DPI logical-vs-physical pixel mismatch with Qt's frameGeometry)
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(msg.hWnd, ctypes.byref(rect))
                 b = self._BORDER
-                left = abs(x - geo.left()) <= b
-                right = abs(x - geo.right()) <= b
-                top = abs(y - geo.top()) <= b
-                bottom = abs(y - geo.bottom()) <= b
+                at_left   = x - rect.left < b
+                at_right  = rect.right - x < b
+                at_top    = y - rect.top < b
+                at_bottom = rect.bottom - y < b
                 # HTLEFT=10 HTRIGHT=11 HTTOP=12 HTTOPLEFT=13 HTTOPRIGHT=14
                 # HTBOTTOM=15 HTBOTTOMLEFT=16 HTBOTTOMRIGHT=17
-                if top and left:
+                if at_top and at_left:
                     return True, 13
-                if top and right:
+                if at_top and at_right:
                     return True, 14
-                if bottom and left:
+                if at_bottom and at_left:
                     return True, 16
-                if bottom and right:
+                if at_bottom and at_right:
                     return True, 17
-                if left:
+                if at_left:
                     return True, 10
-                if right:
+                if at_right:
                     return True, 11
-                if top:
+                if at_top:
                     return True, 12
-                if bottom:
+                if at_bottom:
                     return True, 15
         except Exception:
             pass
@@ -5314,6 +5538,33 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(
                                 self, "Export failed", f"Export failed:\n{e}"
                             )
+        # Export each graph to separate CSV (_plot1, _plot2, ...) on close
+        if self.graphs:
+            reply = QMessageBox.question(
+                self,
+                "Export graph data to CSV?",
+                f"Export data from {len(self.graphs)} graph(s) to separate CSV files?\n"
+                "(e.g. filename_plot1.csv, filename_plot2.csv, ...)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                base_path, _ = QFileDialog.getSaveFileName(
+                    self, "Export graph data (base name)", "graph_export.csv", "CSV (*.csv);;All files (*)"
+                )
+                if base_path:
+                    base = base_path.rsplit(".", 1)[0] if "." in base_path else base_path
+                    exported = 0
+                    for i, graph in enumerate(self.graphs, start=1):
+                        plot_path = f"{base}_plot{i}.csv"
+                        try:
+                            if graph.export_graph_data_to_csv(path=plot_path):
+                                exported += 1
+                                logging.info(f"Exported graph {i} to {plot_path}")
+                        except Exception as e:
+                            logging.warning(f"Export graph {i} failed: {e}")
+                    if exported:
+                        self._show_toast(f"Exported {exported} graph(s) to CSV")
         if self.offline_db:
             try:
                 self.offline_db.close()

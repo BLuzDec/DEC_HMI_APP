@@ -20,7 +20,7 @@ class PLCThread(threading.Thread):
         self.stop_event = threading.Event()
         self.client = snap7.client.Client()
         self.db_connection = None
-        self.name_system = 'FlexPTS'
+        self.name_system = 'Snap7'
         self.read_count = 0
         self.error_count = 0
         self.last_error = None
@@ -62,13 +62,23 @@ class PLCThread(threading.Thread):
         self._current_db_date = None
         self.db_path = None  # Set in init_duckdb() to today's file
         
+        # Auto-generate snap7_node_ids.json from DB-named CSVs if available
+        try:
+            from generate_snap7_config import generate_snap7_config, discover_db_csvs
+            if any(discover_db_csvs(self.external_dir).values()):
+                generate_snap7_config(self.external_dir)
+                logging.info("snap7_node_ids.json regenerated from DB-named CSVs")
+        except Exception as e:
+            logging.debug("Config generation skipped: %s", e)
+
         # Load configuration from external folder
         config_path = os.path.join(self.external_dir, 'snap7_node_ids.json')
         with open(config_path) as f:
             self.config = json.load(f)
         
         # Get main node configuration
-        node_config = self.config['Node_id_flexpts_S7_1500_snap7']
+        # Support both new generic key and legacy key for backward compatibility
+        node_config = self.config.get('snap7_variables') or self.config.get('Node_id_flexpts_S7_1500_snap7', {})
         
         # Combine regular variables and recipe variables
         self.take_specific_nodes = {}

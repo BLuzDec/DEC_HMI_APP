@@ -189,6 +189,41 @@ def load_recipe_csv(
     return recipe_params, metadata
 
 
+def discover_csv_files(directory: Optional[str] = None):
+    """Find exchange and recipe CSV files.  Prefers DB-named versions, falls back to plain names.
+
+    Returns (exchange_path_or_None, recipe_path_or_None).
+    """
+    if directory is None:
+        directory = os.path.dirname(os.path.abspath(__file__))
+
+    exchange_path = None
+    recipe_path = None
+
+    if not os.path.isdir(directory):
+        return exchange_path, recipe_path
+
+    for fname in sorted(os.listdir(directory)):
+        if not fname.lower().endswith(".csv"):
+            continue
+        lower = fname.lower()
+        full = os.path.join(directory, fname)
+
+        if lower.startswith("exchange_variables"):
+            # DB-named file takes priority over plain name
+            if "db" in lower:
+                exchange_path = full
+            elif exchange_path is None:
+                exchange_path = full
+        elif lower.startswith("recipe_variables"):
+            if "db" in lower:
+                recipe_path = full
+            elif recipe_path is None:
+                recipe_path = full
+
+    return exchange_path, recipe_path
+
+
 def load_exchange_and_recipes(
     exchange_path: Optional[str] = None,
     recipe_path: Optional[str] = None,
@@ -198,11 +233,18 @@ def load_exchange_and_recipes(
     """
     Load both exchange and recipe CSVs and return a single LoadedVariables result.
     Exchange is loaded first; recipe variables are merged and get their own grouping.
+    Automatically discovers DB-named CSVs (e.g. exchange_variables_DB20.csv) when
+    no explicit paths are provided.
     """
+    ext_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Auto-discover DB-named CSVs as defaults
+    discovered_exchange, discovered_recipe = discover_csv_files(ext_dir)
+
     if default_exchange_dir is None:
-        default_exchange_dir = os.path.join(os.path.dirname(__file__), "exchange_variables.csv")
+        default_exchange_dir = discovered_exchange or os.path.join(ext_dir, "exchange_variables.csv")
     if default_recipe_dir is None:
-        default_recipe_dir = os.path.join(os.path.dirname(__file__), "recipe_variables.csv")
+        default_recipe_dir = discovered_recipe or os.path.join(ext_dir, "recipe_variables.csv")
 
     ex_path = exchange_path or default_exchange_dir
     rec_path = recipe_path or default_recipe_dir

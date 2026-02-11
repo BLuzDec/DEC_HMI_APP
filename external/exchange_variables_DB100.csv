@@ -1,0 +1,24 @@
+Variable;Type;Min;Max;Unit;Name
+Dose_number;INT;0;1000;count;Dose number
+StableWeight;REAL;0;10;g;Stable weight
+TargetWeight;REAL;0;10;g;Target weight
+EjectorPosition;REAL;0;100;%;Ejector position
+InstantDensity;REAL;0;10;g/cm³;Instant density
+AvgDensity;REAL;0;10;g/cm³;Avg density
+FlexPTS_running;BOOL;0;1;-;FlexPTS running
+PT_ChamberValve;REAL;0;10;bar;PT chamber valve
+PR_ChamberValve;REAL;0;10;bar;PR chamber valve
+PT_OutletValve;REAL;0;10;bar;PT outlet valve
+PR_OutletValve;REAL;0;10;bar;PR outlet valve
+arrPT_chamber;REAL[600];0;10;bar;PT chamber array
+arrPR_chamber;REAL[600];0;10;bar;PR chamber array
+FlexPTS_running_Keyence1;BOOL;0;1;-;FlexPTS Keyence1
+FT_Keyence1;REAL;0;1000;N;FT Keyence1
+PT_Keyence1;REAL;0;10;bar;PT Keyence1
+arrPT_Keyence1;REAL[600];0;10;bar;PT Keyence1 array
+arrFT_Keyence1;REAL[600];0;1000;N;FT Keyence1 array
+FlexPTS_running_Keyence2;BOOL;0;1;-;FlexPTS Keyence2
+FT_Keyence2;REAL;0;1000;N;FT Keyence2
+PT_Keyence2;REAL;0;10;bar;PT Keyence2
+arrPT_Keyence2;REAL[600];0;10;bar;PT Keyence2 array
+arrFT_Keyence2;REAL[600];0;1000;N;FT Keyence2 array
