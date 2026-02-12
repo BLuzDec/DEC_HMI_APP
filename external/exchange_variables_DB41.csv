@@ -1,0 +1,2 @@
+Variable;Type;Min;Max;Unit;Name
+DB_Device.FT1914.rFeedback;real;0;1000;m3/h;flow

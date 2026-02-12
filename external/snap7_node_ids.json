@@ -121,6 +121,11 @@
             "REAL",
             600
         ],
+        "DB_Device.FT1914.rFeedback": [
+            41,
+            0,
+            "REAL"
+        ],
         "recipes": {
             "rEjectingPressure1": [
                 101,
