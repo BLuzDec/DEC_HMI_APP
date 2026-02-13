@@ -22,7 +22,7 @@ class PLCSimulator(QThread):
         # Default CSV path in external folder — prefer DB-named CSVs
         if csv_path is None:
             try:
-                from variable_loader import discover_csv_files
+                from .variable_loader import discover_csv_files
                 _disc_ex, _ = discover_csv_files(self.external_dir)
                 csv_path = _disc_ex or os.path.join(self.external_dir, 'exchange_variables.csv')
             except Exception:

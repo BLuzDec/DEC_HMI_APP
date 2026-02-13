@@ -79,12 +79,16 @@ echo.
 echo [OK] PyInstaller build succeeded!
 echo.
 
-REM Verify critical files
+REM Verify critical files (onboarding dashboard, monitoring, shared UI, sub-apps)
 set MISSING=0
 if not exist "dist\DecAutomationApp\DecAutomation Studio.exe" echo [WARN] Missing: DecAutomation Studio.exe & set MISSING=1
 if not exist "dist\DecAutomationApp\_internal\snap7.dll" echo [WARN] Missing: _internal\snap7.dll & set MISSING=1
-if not exist "dist\DecAutomationApp\_internal\external\exchange_variables.csv" echo [WARN] Missing: _internal\external\exchange_variables.csv & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\monitoring\external\exchange_variables.csv" echo [WARN] Missing: _internal\monitoring\external\exchange_variables.csv & set MISSING=1
 if not exist "dist\DecAutomationApp\_internal\Images\app_icon.ico" echo [WARN] Missing: _internal\Images\app_icon.ico & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\shared\title_bar.py" echo [WARN] Missing: _internal\shared\title_bar.py & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\monitoring\main_window.py" echo [WARN] Missing: _internal\monitoring\main_window.py & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\step7_exchange\main.py" echo [WARN] Missing: _internal\step7_exchange\main.py & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\st_block\main.py" echo [WARN] Missing: _internal\st_block\main.py & set MISSING=1
 if %MISSING%==0 echo [OK] All critical files verified in bundle.
 echo.
 

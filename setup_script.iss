@@ -59,6 +59,6 @@ Name: "{autodesktop}\DecAutomation Studio"; Filename: "{app}\DecAutomation Studi
 Filename: "{app}\DecAutomation Studio.exe"; Description: "{cm:LaunchProgram,DecAutomation Studio}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\external\automation_data.db"
-Type: filesandordirs; Name: "{app}\external\DB_OPC_UA.db"
+Type: filesandordirs; Name: "{app}\_internal\monitoring\external\automation_data.db"
+Type: filesandordirs; Name: "{app}\_internal\monitoring\external\DB_OPC_UA.db"
 Type: filesandordirs; Name: "{app}\*.log"

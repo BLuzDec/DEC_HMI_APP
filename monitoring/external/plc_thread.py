@@ -64,7 +64,7 @@ class PLCThread(threading.Thread):
         
         # Auto-generate snap7_node_ids.json from DB-named CSVs if available
         try:
-            from generate_snap7_config import generate_snap7_config, discover_db_csvs
+            from .generate_snap7_config import generate_snap7_config, discover_db_csvs
             if any(discover_db_csvs(self.external_dir).values()):
                 generate_snap7_config(self.external_dir)
                 logging.info("snap7_node_ids.json regenerated from DB-named CSVs")

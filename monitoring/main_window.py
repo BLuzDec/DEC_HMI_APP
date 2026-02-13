@@ -28,6 +28,7 @@ from external.plc_ads_thread import PLCADSThread
 from external.plc_simulator import PLCSimulator
 from external.variable_loader import load_exchange_and_recipes
 from external.analytics_window import AnalyticsWindow
+from shared.title_bar import CustomTitleBar, get_app_icon, get_project_root
 
 
 # Color palette for limit lines (user can choose from these)
@@ -47,32 +48,8 @@ LIMIT_LINE_COLORS = [
 
 
 def _app_icon():
-    """Load application icon: prefer DEC Group logo with taskbar sizes, then other Images/assets."""
-    base = os.path.dirname(os.path.abspath(__file__))
-    # DEC Group logo: build multi-size icon so it fits entirely in Windows taskbar (16/24/32)
-    dec_group = os.path.join(base, "Images", "Dec Group_bleu_noir_transparent.png")
-    if os.path.isfile(dec_group):
-        pix = QPixmap(dec_group)
-        if not pix.isNull():
-            icon = QIcon()
-            for size in (16, 24, 32, 48, 256):
-                scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                icon.addPixmap(scaled)
-            return icon
-    # Fallback: Dec True end-to-end logo
-    dec_logo = os.path.join(base, "Images", "Dec True end-to-end final white_small.png")
-    if os.path.isfile(dec_logo):
-        icon = QIcon(dec_logo)
-        if not icon.isNull():
-            return icon
-    for name in ("app_icon.ico", "app_icon.png", "icon.ico"):
-        for folder in (base, os.path.join(base, "assets")):
-            path = os.path.join(folder, name)
-            if os.path.isfile(path):
-                icon = QIcon(path)
-                if not icon.isNull():
-                    return icon
-    return QIcon()
+    """Alias for shared get_app_icon (used by dialogs/popups in this module)."""
+    return get_app_icon()
 
 
 class ConnectionPopup(QDialog):
@@ -2449,143 +2426,6 @@ class _GraphAreaWithBackground(QWidget):
         super().paintEvent(event)
 
 
-class _CustomTitleBar(QWidget):
-    """Custom title bar that embeds the QMenuBar alongside the window title and controls."""
-
-    def __init__(self, parent: QMainWindow):
-        super().__init__(parent)
-        self._parent = parent
-        self._drag_pos = None
-        self.setFixedHeight(32)
-        self.setStyleSheet("background-color: #1e1e1e;")
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # App icon
-        self.icon_label = QLabel()
-        self.icon_label.setFixedSize(18, 18)
-        icon = _app_icon()
-        if not icon.isNull():
-            pix = icon.pixmap(16, 16)
-            self.icon_label.setPixmap(pix)
-        layout.addWidget(self.icon_label)
-        layout.addSpacing(10)
-
-        # Menu bar (embedded) – fixed width so it doesn't eat the draggable area
-        self.menu_bar = QMenuBar()
-        self.menu_bar.setStyleSheet("""
-            QMenuBar {
-                background-color: transparent;
-                color: #cccccc;
-                border: none;
-                font-size: 12px;
-            }
-            QMenuBar::item {
-                background-color: transparent;
-                padding: 6px 10px;
-                border-radius: 3px;
-            }
-            QMenuBar::item:selected {
-                background-color: #3e3e42;
-                color: #ffffff;
-            }
-            QMenuBar::item:pressed {
-                background-color: #007ACC;
-                color: #ffffff;
-            }
-        """)
-        self.menu_bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        layout.addWidget(self.menu_bar)
-
-        # Draggable spacer – this empty label lets mouse events pass to the title bar for dragging
-        self._drag_spacer = QLabel()
-        self._drag_spacer.setStyleSheet("background: transparent;")
-        self._drag_spacer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self._drag_spacer, 1)  # stretch factor = 1
-
-        # Window control buttons (minimize, maximize/restore, close)
-        btn_style_normal = """
-            QPushButton {
-                background-color: transparent; color: #999999; border: none;
-                font-family: "Segoe MDL2 Assets"; font-size: 10px;
-                padding: 0px; min-width: 46px; min-height: 32px;
-            }
-            QPushButton:hover { background-color: #3e3e42; color: #ffffff; }
-        """
-        btn_style_close = """
-            QPushButton {
-                background-color: transparent; color: #999999; border: none;
-                font-family: "Segoe MDL2 Assets"; font-size: 10px;
-                padding: 0px; min-width: 46px; min-height: 32px;
-            }
-            QPushButton:hover { background-color: #e81123; color: #ffffff; }
-        """
-
-        self.btn_minimize = QPushButton("\uE921")  # Minimize glyph
-        self.btn_minimize.setStyleSheet(btn_style_normal)
-        self.btn_minimize.clicked.connect(parent.showMinimized)
-
-        self.btn_maximize = QPushButton("\uE922")  # Maximize glyph
-        self.btn_maximize.setStyleSheet(btn_style_normal)
-        self.btn_maximize.clicked.connect(self._toggle_maximize)
-
-        self.btn_close = QPushButton("\uE8BB")  # Close glyph
-        self.btn_close.setStyleSheet(btn_style_close)
-        self.btn_close.clicked.connect(parent.close)
-
-        layout.addWidget(self.btn_minimize)
-        layout.addWidget(self.btn_maximize)
-        layout.addWidget(self.btn_close)
-
-    def _toggle_maximize(self):
-        if self._parent.isMaximized():
-            self._parent.showNormal()
-            self.btn_maximize.setText("\uE922")
-        else:
-            self._parent.showMaximized()
-            self.btn_maximize.setText("\uE923")  # Restore glyph
-
-    # ── Dragging ──
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self._parent.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
-            self._parent.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._toggle_maximize()
-
-    def apply_theme(self, mode="dark"):
-        """Apply dark or light theme to title bar and menu."""
-        if mode == "light":
-            bg = "#f0f0f0"
-            fg = "#333333"
-            menu_hover = "#d0d0d0"
-            menu_selected_fg = "#333333"
-        else:
-            bg = "#1e1e1e"
-            fg = "#cccccc"
-            menu_hover = "#3e3e42"
-            menu_selected_fg = "#ffffff"
-        self.setStyleSheet(f"background-color: {bg};")
-        self.menu_bar.setStyleSheet(f"""
-            QMenuBar {{ background-color: transparent; color: {fg}; border: none; font-size: 12px; }}
-            QMenuBar::item {{ background-color: transparent; padding: 6px 10px; border-radius: 3px; }}
-            QMenuBar::item:selected {{ background-color: {menu_hover}; color: {menu_selected_fg}; }}
-            QMenuBar::item:pressed {{ background-color: #007ACC; color: white; }}
-        """)
-
-
 class MainWindow(QMainWindow):
     data_signal = Signal(str, object)
     status_signal = Signal(str, str, object)  # status_type, message, details
@@ -2595,7 +2435,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DecAutomation Studio")
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.resize(1280, 800)
-        _icon = _app_icon()
+        _icon = get_app_icon()
         if not _icon.isNull():
             self.setWindowIcon(_icon)
         self.latest_values = {}
@@ -2614,8 +2454,8 @@ class MainWindow(QMainWindow):
             self.recipe_variables_path = os.path.join(_ext, "recipe_variables.csv")
         self.apply_theme()
 
-        # Custom title bar with embedded menu
-        self._title_bar = _CustomTitleBar(self)
+        # Custom title bar with embedded menu (generic class from shared)
+        self._title_bar = CustomTitleBar(self, show_menu_bar=True)
         self._create_menu_bar()
 
         # Wrap everything in a vertical layout: title bar on top, content below
@@ -3157,7 +2997,7 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.sidebar)
 
         # Graph area: background image (highly transparent) behind scroll area
-        _base = os.path.dirname(os.path.abspath(__file__))
+        _base = get_project_root()
         _bg_path = os.path.join(_base, "Images", "dec_background_endToEnd_bottomRight.png")
         self.graph_area_widget = _GraphAreaWithBackground(_bg_path, opacity=0.12, parent=self)
         self.scroll_area = QScrollArea()

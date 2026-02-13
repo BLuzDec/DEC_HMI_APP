@@ -1,8 +1,8 @@
 # main_window.spec
 #
 # PyInstaller spec file for DecAutomation Studio.
-# Bundles the full application with all data files, images, DLLs, and
-# the external/ package resources so it runs on PCs without Python,
+# Bundles the full application with onboarding dashboard, monitoring sub-app
+# (monitoring/external/), and data files so it runs on PCs without Python,
 # TwinCAT, or any other runtime pre-installed.
 #
 # Usage:  pyinstaller main_window.spec
@@ -13,7 +13,9 @@ import os
 # ── paths ────────────────────────────────────────────────────────────
 # SPECPATH is injected by PyInstaller – it points to the folder containing this .spec file
 base_dir = SPECPATH
-external_dir = os.path.join(base_dir, 'external')
+monitoring_dir = os.path.join(base_dir, 'monitoring')
+step7_dir = os.path.join(base_dir, 'step7_exchange')
+st_block_dir = os.path.join(base_dir, 'st_block')
 images_dir = os.path.join(base_dir, 'Images')
 icon_file = os.path.join(images_dir, 'app_icon.ico')
 
@@ -31,18 +33,21 @@ datas = [
     (os.path.join(images_dir, 'dec_background_endToEnd_bottomRight.png'), 'Images'),
     (os.path.join(images_dir, 'DEC_G-2016_WHITE.png'), 'Images'),
     (os.path.join(images_dir, 'app_icon.ico'), 'Images'),
+] + [(p, 'Images') for p in [
+    os.path.join(images_dir, 'DEC_Monitoring.png'),
+    os.path.join(images_dir, 'DEC_Exchange.png'),
+    os.path.join(images_dir, 'DEC_S_T_BlockConfig.png'),
+] if os.path.isfile(p)] + [
+    # ── Shared UI (CustomTitleBar, get_app_icon) ───────────────────────
+    (os.path.join(base_dir, 'shared'), 'shared'),
 
-    # ── External: CSV config files ───────────────────────────────────
-    (os.path.join(external_dir, 'exchange_variables.csv'), 'external'),
-    (os.path.join(external_dir, 'recipe_variables.csv'), 'external'),
-    (os.path.join(external_dir, 'exchange_variables_ads.csv'), 'external'),
-    (os.path.join(external_dir, 'recipe_variables_ads.csv'), 'external'),
+    # ── Sub-applications (config files are inside monitoring/external/) ─
+    (monitoring_dir, 'monitoring'),
+    (step7_dir, 'step7_exchange'),
+    (st_block_dir, 'st_block'),
 
-    # ── External: JSON config ────────────────────────────────────────
-    (os.path.join(external_dir, 'snap7_node_ids.json'), 'external'),
-
-    # ── Root-level JSON (legacy reference from plc_thread.py) ────────
-    (os.path.join(base_dir, 'snap7_node_ids.json'), '.'),
+    # ── Onboarding assets (tile images) ───────────────────────────────
+    (os.path.join(base_dir, 'onboarding', 'assets'), 'onboarding/assets'),
 ]
 
 # ── native binaries ──────────────────────────────────────────────────
@@ -84,7 +89,11 @@ hidden_imports = [
     'plotly.express',
     'pandas',
     'matplotlib',
-    # our own package
+    # shared UI (title bar, app icon)
+    'shared',
+    'shared.title_bar',
+    # monitoring sub-app (external = monitoring/external when pathex includes monitoring)
+    'monitoring.main_window',
     'external',
     'external.plc_thread',
     'external.plc_ads_thread',
@@ -104,7 +113,7 @@ hidden_imports = [
 # ── Analysis ─────────────────────────────────────────────────────────
 a = Analysis(
     ['main.py'],                         # entry point
-    pathex=[base_dir],
+    pathex=[monitoring_dir, base_dir],   # monitoring first so 'external' -> monitoring/external
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden_imports,

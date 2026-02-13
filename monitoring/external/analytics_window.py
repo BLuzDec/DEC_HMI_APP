@@ -18,6 +18,14 @@ from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont, QIcon
 
 from external.calculations import DataAnalyzer
 
+# Ensure project root is on path for shared (when run from monitoring/)
+import os as _os
+_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
+from shared.title_bar import get_app_icon
+
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -35,18 +43,8 @@ class FastTooltipStyle(QProxyStyle):
 
 
 def _app_icon_analytics():
-    """Load app icon for the analytics window (same as main window)."""
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-    dec_group = os.path.join(base, "Images", "Dec Group_bleu_noir_transparent.png")
-    if os.path.isfile(dec_group):
-        pix = QPixmap(dec_group)
-        if not pix.isNull():
-            icon = QIcon()
-            for size in (16, 24, 32, 48):
-                scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                icon.addPixmap(scaled)
-            return icon
-    return QIcon()
+    """Load app icon (uses shared get_app_icon)."""
+    return get_app_icon()
 
 
 class _AnalyticsTitleBar(QWidget):
