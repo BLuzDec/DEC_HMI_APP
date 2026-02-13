@@ -114,6 +114,11 @@ def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
                 display_label = _display_label(name, unit, var_name)
 
                 variables.append(var_name)
+                plc_var = (row.get("PLC_VAR_NAME") or "").strip()
+                array_base = (row.get("ArrayBaseType") or "").strip()
+                array_size_str = (row.get("ArraySize") or "").strip()
+                array_size = int(array_size_str) if array_size_str.isdigit() else None
+
                 metadata[var_name] = {
                     "min": min_val,
                     "max": max_val,
@@ -123,6 +128,9 @@ def load_exchange_csv(path: str) -> Tuple[List[str], Dict[str, dict]]:
                     "display_label": display_label,
                     "type": var_type,
                     "decimals": decimals,
+                    "plc_var_name": plc_var or var_name,
+                    "array_base_type": array_base or None,
+                    "array_size": array_size,
                 }
     except Exception as e:
         logging.error("Error loading exchange variables CSV %s: %s", path, e)
@@ -173,6 +181,11 @@ def load_recipe_csv(
 
                 display_label = _display_label(name, unit, var_name)
 
+                plc_var = (row.get("PLC_VAR_NAME") or "").strip()
+                array_base = (row.get("ArrayBaseType") or "").strip()
+                array_size_str = (row.get("ArraySize") or "").strip()
+                array_size = int(array_size_str) if array_size_str.isdigit() else None
+
                 metadata[var_name] = {
                     "min": min_val,
                     "max": max_val,
@@ -182,6 +195,9 @@ def load_recipe_csv(
                     "display_label": display_label,
                     "type": var_type,
                     "decimals": decimals,
+                    "plc_var_name": plc_var or var_name,
+                    "array_base_type": array_base or None,
+                    "array_size": array_size,
                 }
     except Exception as e:
         logging.error("Error loading recipe variables CSV %s: %s", path, e)

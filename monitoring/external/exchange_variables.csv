@@ -1,24 +1,24 @@
-Variable;Type;Min;Max;Unit;Name
-Dose_number;Int;0;1000;count;Dose number
-StableWeight;Real;0;10;g;Stable weight
-TargetWeight;Real;0;10;g;Target weight
-EjectorPosition;Real;0;100;%;Ejector position
-InstantDensity;Real;0;10;g/cm³;Instant density
-AvgDensity;Real;0;10;g/cm³;Avg density
-FlexPTS_running;Bool;0;1;-;FlexPTS running
-PT_ChamberValve;Real;0;10;bar;PT chamber valve
-PR_ChamberValve;Real;0;10;bar;PR chamber valve
-PT_OutletValve;Real;0;10;bar;PT outlet valve
-PR_OutletValve;Real;0;10;bar;PR outlet valve
-arrPT_chamber;Array;0;10;bar;PT chamber array
-arrPR_chamber;Array;0;10;bar;PR chamber array
-FlexPTS_running_Keyence1;Bool;0;1;-;FlexPTS Keyence1
-FT_Keyence1;Real;0;1000;N;FT Keyence1
-PT_Keyence1;Real;0;10;bar;PT Keyence1
-arrPT_Keyence1;Array;0;10;bar;PT Keyence1 array
-arrFT_Keyence1;Array;0;1000;N;FT Keyence1 array
-FlexPTS_running_Keyence2;Bool;0;1;-;FlexPTS Keyence2
-FT_Keyence2;Real;0;1000;N;FT Keyence2
-PT_Keyence2;Real;0;10;bar;PT Keyence2
-arrPT_Keyence2;Array;0;10;bar;PT Keyence2 array
-arrFT_Keyence2;Array;0;1000;N;FT Keyence2 array
+Variable;Type;Min;Max;Unit;Name;PLC_VAR_NAME;ArrayBaseType;ArraySize
+Dose_number;Int;0;1000;count;Dose number;"DB_Param".HeightControl.Dose_number;;
+StableWeight;Real;0;10;g;Stable weight;"DB_Param".HeightControl.StableWeight;;
+TargetWeight;Real;0;10;g;Target weight;"DB_Param".HeightControl.Target_weight;;
+EjectorPosition;Real;0;100;%;Ejector position;"DB_Param".HeightControl.EjectorPosition;;
+InstantDensity;Real;0;10;g/cm³;Instant density;"DB_Param".HeightControl.InstantDensity;;
+AvgDensity;Real;0;10;g/cm³;Avg density;"DB_Param".HeightControl.AvgDensity;;
+FlexPTS_running;Bool;0;1;-;FlexPTS running;"DB_FlexPTS".bIsBusy;;
+PT_ChamberValve;Real;0;10;bar;PT chamber valve;"DB_FlexPTS".iChamberPressure;;
+PR_ChamberValve;Real;0;10;bar;PR chamber valve;"DB_FlexPTS".oChamberPressure;;
+PT_OutletValve;Real;0;10;bar;PT outlet valve;"DB_FlexPTS".iOutletPressure;;
+PR_OutletValve;Real;0;10;bar;PR outlet valve;"DB_FlexPTS".oOutletPressure;;
+arrPT_chamber;Array;0;10;bar;PT chamber array;"DB_FlexPTS".iChamberPressure;Real;601
+arrPR_chamber;Array;0;10;bar;PR chamber array;"DB_FlexPTS".oChamberPressure;Real;601
+FlexPTS_running_Keyence1;Bool;0;1;-;FlexPTS Keyence1;"FPT_1".bIsBusy;;
+FT_Keyence1;Real;0;1000;N;FT Keyence1;FPT_1.Process Data In - Instantaneous flow;;
+PT_Keyence1;Real;0;10;bar;PT Keyence1;FPT_1.Process Data In - Pressure;;
+arrPT_Keyence1;Array;0;10;bar;PT Keyence1 array;FPT_1.Process Data In - Pressure;Real;601
+arrFT_Keyence1;Array;0;1000;N;FT Keyence1 array;FPT_1.Process Data In - Instantaneous flow;Real;601
+FlexPTS_running_Keyence2;Bool;0;1;-;FlexPTS Keyence2;"FPT_2".bIsBusy;;
+FT_Keyence2;Real;0;1000;N;FT Keyence2;FPT_2.Process Data In - Instantaneous flow;;
+PT_Keyence2;Real;0;10;bar;PT Keyence2;FPT_2.Process Data In - Pressure;;
+arrPT_Keyence2;Array;0;10;bar;PT Keyence2 array;FPT_2.Process Data In - Pressure;Real;601
+arrFT_Keyence2;Array;0;1000;N;FT Keyence2 array;FPT_2.Process Data In - Instantaneous flow;Real;601

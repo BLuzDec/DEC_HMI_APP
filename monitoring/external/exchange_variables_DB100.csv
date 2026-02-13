@@ -1,6 +1,6 @@
-Variable;Type;Min;Max;Unit;Name
-Dose_number;INT;0;1000;count;Dose number
-StableWeight;REAL;0;10;g;Stable weight
+Variable;Type;Min;Max;Unit;Name;PLC_VAR_NAME
+Dose_number;INT;0;1000;count;Dose number;"IF STEPPER_GP = 4 THEN Dose_number = COUNTER ELSE STEPPER_GP = 2 END_IF;"
+StableWeight;REAL;0;10;g;Stable weight;DB_Device.test2
 TargetWeight;REAL;0;10;g;Target weight
 EjectorPosition;REAL;0;100;%;Ejector position
 InstantDensity;REAL;0;10;g/cm³;Instant density

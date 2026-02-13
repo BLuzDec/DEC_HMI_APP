@@ -1,16 +1,16 @@
-Variable;Type;Min;Max;Unit;Name
-rEjectingPressure1;Real;0;10;bar;Ejecting pressure 1
-rTimerEjection1;Real;0;100;s;Timer ejection 1
-rEjectingPressure2;Real;0;10;bar;Ejecting pressure 2
-rTimerEjection2;Real;0;100;s;Timer ejection 2
-rUncloggingPressure;Real;0;10;bar;Unclogging pressure
-rVacuumPressure1;Real;0;10;bar;Vacuum pressure 1
-rTimerSuction;Real;0;100;s;Timer suction
-rVacuumPressure2;Real;0;10;bar;Vacuum pressure 2
-rDelayAlternateVacuum;Real;0;100;s;Delay alternate vacuum
-rDelayCloseOutletValve;Real;0;100;s;Delay close outlet valve
-rDelaySetEjectingPressure1;Real;0;100;s;Delay set ejecting pressure 1
-rVibratorPressure;Real;0;10;bar;Vibrator pressure
-rTimerVibrator;Real;0;100;s;Timer vibrator
-rDelayVibrator;Real;0;100;s;Delay vibrator
-rDelayAtmPressure;Real;0;100;s;Delay atm pressure
+Variable;Type;Min;Max;Unit;Name;PLC_VAR_NAME;ArrayBaseType;ArraySize
+rEjectingPressure1;Real;0;10;bar;Ejecting pressure 1;"DB_Recipe".FlexPTS.rEjectingPressure1;;
+rTimerEjection1;Real;0;100;s;Timer ejection 1;"DB_Recipe".FlexPTS.rTimerEjection1;;
+rEjectingPressure2;Real;0;10;bar;Ejecting pressure 2;"DB_Recipe".FlexPTS.rEjectingPressure2;;
+rTimerEjection2;Real;0;100;s;Timer ejection 2;"DB_Recipe".FlexPTS.rTimerEjection2;;
+rUncloggingPressure;Real;0;10;bar;Unclogging pressure;"DB_Recipe".FlexPTS.rUncloggingPressure;;
+rVacuumPressure1;Real;0;10;bar;Vacuum pressure 1;"DB_Recipe".FlexPTS.rVacuumPressure1;;
+rTimerSuction;Real;0;100;s;Timer suction;"DB_Recipe".FlexPTS.rTimerSuction;;
+rVacuumPressure2;Real;0;10;bar;Vacuum pressure 2;"DB_Recipe".FlexPTS.rVacuumPressure2;;
+rDelayAlternateVacuum;Real;0;100;s;Delay alternate vacuum;"DB_Recipe".FlexPTS.rDelayAlternateVacuum;;
+rDelayCloseOutletValve;Real;0;100;s;Delay close outlet valve;"DB_Recipe".FlexPTS.rDelayCloseOutletValve;;
+rDelaySetEjectingPressure1;Real;0;100;s;Delay set ejecting pressure 1;"DB_Recipe".FlexPTS.rDelaySetEjectingPressure1;;
+rVibratorPressure;Real;0;10;bar;Vibrator pressure;"DB_Recipe".FlexPTS.rVibratorPressure;;
+rTimerVibrator;Real;0;100;s;Timer vibrator;"DB_Recipe".FlexPTS.rTimerVibrator;;
+rDelayVibrator;Real;0;100;s;Delay vibrator;"DB_Recipe".FlexPTS.rDelayVibrator;;
+rDelayAtmPressure;Real;0;100;s;Delay atm pressure;"DB_Recipe".FlexPTS.rDelayAtmPressure;;

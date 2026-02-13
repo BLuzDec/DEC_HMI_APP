@@ -1,0 +1,55 @@
+﻿DATA_BLOCK "DB_ProAutomation_VARS"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : {VERSION}
+NON_RETAIN
+   STRUCT 
+{VARIABLES}
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK
+
+DATA_BLOCK "DB_ProAutomation_RECIPES"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : {VERSION}
+NON_RETAIN
+   STRUCT
+{RECIPES}
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK
+
+FUNCTION "FC_ProAutomation_Exchange" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : {VERSION}
+   VAR_TEMP 
+      i : Int;
+	  j : Int;
+	  k : Int;
+	  l : Int;
+   END_VAR
+
+   VAR CONSTANT 
+      MAX_ARRAY_VAL : Int := 600;
+   END_VAR
+
+
+BEGIN
+REGION Exchange Variables Communication
+
+	//Single Variables assignments
+{VARIABLES_ASSIGNMENTS}
+
+	//Array assignments
+{ARRAY_ASSIGNMENTS}
+	
+END_REGION
+
+REGION Exchange Recipes Communication
+	//Single Recipes assignments
+{RECIPES_ASSIGNMENTS}
+	
+END_REGION
+END_FUNCTION
+

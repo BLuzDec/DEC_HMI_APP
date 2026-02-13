@@ -1,0 +1,221 @@
+﻿DATA_BLOCK "DB_ProAutomation_VARS"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0    // patch: .2
+NON_RETAIN
+   STRUCT 
+	Dose_number { ExternalWritable := 'False' } : Int;
+	StableWeight { ExternalWritable := 'False' } : Real;
+	TargetWeight { ExternalWritable := 'False' } : Real;
+	EjectorPosition { ExternalWritable := 'False' } : Real;
+	InstantDensity { ExternalWritable := 'False' } : Real;
+	AvgDensity { ExternalWritable := 'False' } : Real;
+	FlexPTS_running { ExternalWritable := 'False' } : Bool;
+	PT_ChamberValve { ExternalWritable := 'False' } : Real;
+	PR_ChamberValve { ExternalWritable := 'False' } : Real;
+	PT_OutletValve { ExternalWritable := 'False' } : Real;
+	PR_OutletValve { ExternalWritable := 'False' } : Real;
+	FlexPTS_running_Keyence1 { ExternalWritable := 'False' } : Bool;
+	FT_Keyence1 { ExternalWritable := 'False' } : Real;
+	PT_Keyence1 { ExternalWritable := 'False' } : Real;
+	FlexPTS_running_Keyence2 { ExternalWritable := 'False' } : Bool;
+	FT_Keyence2 { ExternalWritable := 'False' } : Real;
+	PT_Keyence2 { ExternalWritable := 'False' } : Real;
+	arrPT_chamber : Array[0..599] of Real;
+	arrPR_chamber : Array[0..599] of Real;
+	arrPT_Keyence1 : Array[0..599] of Real;
+	arrFT_Keyence1 : Array[0..599] of Real;
+	arrPT_Keyence2 : Array[0..599] of Real;
+	arrFT_Keyence2 : Array[0..599] of Real;
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK
+
+DATA_BLOCK "DB_ProAutomation_RECIPES"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0    // patch: .2
+NON_RETAIN
+   STRUCT
+	rEjectingPressure1 { ExternalWritable := 'False' } : Real;
+	rTimerEjection1 { ExternalWritable := 'False' } : Real;
+	rEjectingPressure2 { ExternalWritable := 'False' } : Real;
+	rTimerEjection2 { ExternalWritable := 'False' } : Real;
+	rUncloggingPressure { ExternalWritable := 'False' } : Real;
+	rVacuumPressure1 { ExternalWritable := 'False' } : Real;
+	rTimerSuction { ExternalWritable := 'False' } : Real;
+	rVacuumPressure2 { ExternalWritable := 'False' } : Real;
+	rDelayAlternateVacuum { ExternalWritable := 'False' } : Real;
+	rDelayCloseOutletValve { ExternalWritable := 'False' } : Real;
+	rDelaySetEjectingPressure1 { ExternalWritable := 'False' } : Real;
+	rVibratorPressure { ExternalWritable := 'False' } : Real;
+	rTimerVibrator { ExternalWritable := 'False' } : Real;
+	rDelayVibrator { ExternalWritable := 'False' } : Real;
+	rDelayAtmPressure { ExternalWritable := 'False' } : Real;
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK
+
+FUNCTION "FC_ProAutomation_Exchange" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0    // patch: .2
+   VAR_TEMP 
+      i : Int;
+	  j : Int;
+	  k : Int;
+	  l : Int;
+   END_VAR
+
+   VAR CONSTANT 
+      MAX_ARRAY_VAL : Int := 600;
+   END_VAR
+
+
+BEGIN
+REGION Exchange Variables Communication
+
+	//Single Variables assignments
+	IF STEPPER_GP = 4 THEN "DB_ProAutomation_VARS".Dose_number = COUNTER ELSE STEPPER_GP = 2 END_IF;
+	"DB_ProAutomation_VARS".StableWeight := "DB_Device".test2;
+	"DB_ProAutomation_VARS".TargetWeight := "TargetWeight";
+	"DB_ProAutomation_VARS".EjectorPosition := "EjectorPosition";
+	"DB_ProAutomation_VARS".InstantDensity := "InstantDensity";
+	"DB_ProAutomation_VARS".AvgDensity := "AvgDensity";
+	"DB_ProAutomation_VARS".FlexPTS_running := "FlexPTS_running";
+	"DB_ProAutomation_VARS".PT_ChamberValve := "PT_ChamberValve";
+	"DB_ProAutomation_VARS".PR_ChamberValve := "PR_ChamberValve";
+	"DB_ProAutomation_VARS".PT_OutletValve := "PT_OutletValve";
+	"DB_ProAutomation_VARS".PR_OutletValve := "PR_OutletValve";
+	"DB_ProAutomation_VARS".FlexPTS_running_Keyence1 := "FlexPTS_running_Keyence1";
+	"DB_ProAutomation_VARS".FT_Keyence1 := "FT_Keyence1";
+	"DB_ProAutomation_VARS".PT_Keyence1 := "PT_Keyence1";
+	"DB_ProAutomation_VARS".FlexPTS_running_Keyence2 := "FlexPTS_running_Keyence2";
+	"DB_ProAutomation_VARS".FT_Keyence2 := "FT_Keyence2";
+	"DB_ProAutomation_VARS".PT_Keyence2 := "PT_Keyence2";
+
+	//Array assignments
+    //Array: arrPT_chamber
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrPT_chamber[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrPT_chamber["DB_Divers".arrValueCounter] := "arrPT_chamber";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+
+    //Array: arrPR_chamber
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrPR_chamber[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrPR_chamber["DB_Divers".arrValueCounter] := "arrPR_chamber";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+
+    //Array: arrPT_Keyence1
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrPT_Keyence1[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrPT_Keyence1["DB_Divers".arrValueCounter] := "arrPT_Keyence1";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+
+    //Array: arrFT_Keyence1
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrFT_Keyence1[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrFT_Keyence1["DB_Divers".arrValueCounter] := "arrFT_Keyence1";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+
+    //Array: arrPT_Keyence2
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrPT_Keyence2[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrPT_Keyence2["DB_Divers".arrValueCounter] := "arrPT_Keyence2";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+
+    //Array: arrFT_Keyence2
+(*
+    IF ("DB_ProAutomation_VARS".FlexPTS_running OR "DB_FlexPTS".bIsBusy) AND "DB_Divers".arrValueCounter < #MAX_ARRAY_VAL THEN
+        IF "DB_Param".bTriggerRecording THEN
+            FOR #i := 1 TO #MAX_ARRAY_VAL DO
+                "DB_ProAutomation_VARS".arrFT_Keyence2[#i] := 0.0;
+            END_FOR;
+            "DB_Param".bTriggerRecording := FALSE;
+        END_IF;
+        "DB_ProAutomation_VARS".arrFT_Keyence2["DB_Divers".arrValueCounter] := "arrFT_Keyence2";
+        "DB_Divers".arrValueCounter := "DB_Divers".arrValueCounter + 1;
+    ELSIF NOT "DB_FlexPTS".bIsBusy THEN
+        "DB_Param".bTriggerRecording := TRUE;
+        "DB_Divers".arrValueCounter := 0;
+    END_IF;
+*)
+	
+END_REGION
+
+REGION Exchange Recipes Communication
+	//Single Recipes assignments
+	"DB_ProAutomation_RECIPES".rEjectingPressure1 := "rEjectingPressure1";
+	"DB_ProAutomation_RECIPES".rTimerEjection1 := "rTimerEjection1";
+	"DB_ProAutomation_RECIPES".rEjectingPressure2 := "rEjectingPressure2";
+	"DB_ProAutomation_RECIPES".rTimerEjection2 := "rTimerEjection2";
+	"DB_ProAutomation_RECIPES".rUncloggingPressure := "rUncloggingPressure";
+	"DB_ProAutomation_RECIPES".rVacuumPressure1 := "rVacuumPressure1";
+	"DB_ProAutomation_RECIPES".rTimerSuction := "rTimerSuction";
+	"DB_ProAutomation_RECIPES".rVacuumPressure2 := "rVacuumPressure2";
+	"DB_ProAutomation_RECIPES".rDelayAlternateVacuum := "rDelayAlternateVacuum";
+	"DB_ProAutomation_RECIPES".rDelayCloseOutletValve := "rDelayCloseOutletValve";
+	"DB_ProAutomation_RECIPES".rDelaySetEjectingPressure1 := "rDelaySetEjectingPressure1";
+	"DB_ProAutomation_RECIPES".rVibratorPressure := "rVibratorPressure";
+	"DB_ProAutomation_RECIPES".rTimerVibrator := "rTimerVibrator";
+	"DB_ProAutomation_RECIPES".rDelayVibrator := "rDelayVibrator";
+	"DB_ProAutomation_RECIPES".rDelayAtmPressure := "rDelayAtmPressure";
+	
+END_REGION
+END_FUNCTION
+
