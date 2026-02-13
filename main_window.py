@@ -75,6 +75,44 @@ def _app_icon():
     return QIcon()
 
 
+class ConnectionPopup(QDialog):
+    """Popup window for Connection configuration (Client, IP, Variable files, Recording, PLC Trigger)."""
+    def __init__(self, content_widget, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Connection")
+        _icon = _app_icon()
+        if not _icon.isNull():
+            self.setWindowIcon(_icon)
+        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(content_widget)
+        self.setStyleSheet("""
+            QDialog { background-color: #2d2d30; }
+        """)
+        self.resize(420, 520)
+
+
+class LoadPopup(QDialog):
+    """Popup window for Offline Data (Load CSV, Load Recording DB, Recording History)."""
+    def __init__(self, content_widget, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Offline Data")
+        _icon = _app_icon()
+        if not _icon.isNull():
+            self.setWindowIcon(_icon)
+        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(content_widget)
+        self.setStyleSheet("""
+            QDialog { background-color: #2d2d30; }
+        """)
+        self.resize(380, 420)
+
+
 class GraphConfigDialog(QDialog):
     """Dialog to configure graph parameters before creation."""
     def __init__(self, variable_list, parent=None, selected_vars=None):
@@ -2614,33 +2652,20 @@ class MainWindow(QMainWindow):
         self.sidebar_layout = QVBoxLayout(self.sidebar)
         self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Data mode: Online (real-time) vs Offline (CSV → DuckDB)
-        data_mode_layout = QHBoxLayout()
-        data_mode_label = QLabel("Data:")
-        data_mode_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-        data_mode_label.setFixedWidth(50)
-        self.data_mode_combo = QComboBox()
-        self.data_mode_combo.addItems(["Online Data", "Offline Data"])
-        self.data_mode_combo.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
-        self.data_mode_combo.setToolTip("Online: real-time PLC/ADS/Simulation. Offline: load a CSV into DuckDB and plot (faster for many parameters).")
-        self.data_mode_combo.currentTextChanged.connect(self.on_data_mode_changed)
-        data_mode_layout.addWidget(data_mode_label)
-        data_mode_layout.addWidget(self.data_mode_combo)
-        self.sidebar_layout.addLayout(data_mode_layout)
+        # Track offline mode (mutually exclusive with Online/Connection)
+        self._offline_mode_active = False
+        self.connection_popup = None
+        self.load_popup = None
 
-        # Online panel: connection UI (shown when Online Data)
-        self.online_panel = QWidget()
-        online_layout = QVBoxLayout(self.online_panel)
-        online_layout.setContentsMargins(0, 5, 0, 0)
-        online_layout.setSpacing(0)
+        # Shared label width and row height
+        _label_w = 82
+        _row_h = 28
 
-        # Connection UI: collapsible "details" (Client, IP, Variable files) + always-visible (Connect/Pause, Speed, Buffer)
+        # Connection popup content: Client, IP, Variable files, DB name, Recording, PLC Trigger
+        # Connection UI: collapsible "details" (Client, IP, Variable files) + Recording + Trigger
         connection_details_layout = QVBoxLayout()
         connection_details_layout.setSpacing(6)
 
-        # Shared label width and row height so labels and inputs align (same frame height)
-        _label_w = 82
-        _row_h = 28
         # Client Device Type dropdown
         device_type_layout = QHBoxLayout()
         device_type_label = QLabel("Client:")
@@ -2764,51 +2789,6 @@ class MainWindow(QMainWindow):
         self.connection_details_content = QWidget()
         self.connection_details_content.setLayout(connection_details_layout)
 
-        # Connect/Disconnect/Pause row (always visible)
-        ip_connect_layout = QHBoxLayout()
-        self.connect_btn = QPushButton("Connect")
-        self.connect_btn.setCursor(Qt.PointingHandCursor)
-        self.connect_btn.setStyleSheet("""
-            QPushButton { background-color: #1a6fa5; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 3px; }
-            QPushButton:hover { background-color: #2580b8; }
-            QPushButton:pressed { background-color: #0d5a8a; }
-        """)
-        self.disconnect_btn = QPushButton("Disconnect")
-        self.disconnect_btn.setCursor(Qt.PointingHandCursor)
-        self.disconnect_btn.setEnabled(False)
-        self.disconnect_btn.setStyleSheet("""
-            QPushButton { background-color: #6b2d2d; color: #e8e8e8; font-weight: bold; padding: 5px; border: 1px solid #5a2525; border-radius: 3px; }
-            QPushButton:hover { background-color: #7a3535; }
-            QPushButton:pressed { background-color: #5a2020; }
-            QPushButton:disabled { background-color: #3a3a3a; color: #707070; border-color: #2d2d30; }
-        """)
-        self.pause_btn = QPushButton("⏸ Pause")
-        self.pause_btn.setCursor(Qt.PointingHandCursor)
-        self.pause_btn.setEnabled(False)
-        self.pause_btn.setToolTip("Pause live updates. Values stay as-is so you can zoom, pan, or export.")
-        self.pause_btn.setStyleSheet("""
-            QPushButton { background-color: #4a4a4a; color: #e0e0e0; font-weight: bold; padding: 5px; border: 1px solid #3e3e42; border-radius: 3px; }
-            QPushButton:hover { background-color: #5a5a5a; }
-            QPushButton:pressed { background-color: #3a3a3a; }
-            QPushButton:disabled { background-color: #3a3a3a; color: #707070; border-color: #2d2d30; }
-        """)
-        ip_connect_layout.addWidget(self.connect_btn)
-        ip_connect_layout.addWidget(self.disconnect_btn)
-        ip_connect_layout.addWidget(self.pause_btn)
-
-        # Speed and Buffer rows (always visible)
-        speed_layout = QHBoxLayout()
-        speed_label = QLabel("Speed (s):")
-        speed_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        speed_label.setFixedWidth(_label_w)
-        speed_label.setMinimumHeight(_row_h)
-        speed_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.speed_input = QLineEdit("0.05")
-        self.speed_input.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
-        self.speed_input.setMinimumHeight(_row_h)
-        self.speed_input.setToolTip("Communication cycle time in seconds (default: 0.05)")
-        speed_layout.addWidget(speed_label)
-        speed_layout.addWidget(self.speed_input)
         # Connection frame: same box style as PLC TRIGGER had (framed)
         connection_frame = QFrame()
         connection_frame.setStyleSheet("""
@@ -2841,8 +2821,6 @@ class MainWindow(QMainWindow):
         conn_header_layout.addWidget(self.connection_toggle_btn)
         connection_frame_layout.addWidget(conn_header_row)
         connection_frame_layout.addWidget(self.connection_details_content)
-        connection_frame_layout.addLayout(ip_connect_layout)
-        connection_frame_layout.addLayout(speed_layout)
 
         # Recording section (Snap7 only): when to record – time interval or variable change
         self.recording_section = QWidget()
@@ -2882,7 +2860,7 @@ class MainWindow(QMainWindow):
         rec_interval_row.addWidget(self.recording_interval_ms)
         self.recording_interval_row_widget = QWidget()
         self.recording_interval_row_widget.setLayout(rec_interval_row)
-        recording_layout.addWidget(self.recording_interval_row_widget)
+        # Interval (ms) goes to sidebar; do NOT add to recording_layout
         rec_trigger_row = QHBoxLayout()
         rec_trigger_label = QLabel("Trigger var:")
         rec_trigger_label.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -2901,8 +2879,6 @@ class MainWindow(QMainWindow):
         recording_layout.addWidget(self.recording_trigger_row_widget)
         connection_frame_layout.addWidget(self.recording_section)
         self.recording_section.setVisible(False)
-
-        online_layout.addWidget(connection_frame)
 
         # PLC Trigger section: same framed style as CONNECTION (match exactly)
         self.trigger_frame = QFrame()
@@ -2968,12 +2944,75 @@ class MainWindow(QMainWindow):
 
         self.trigger_active = False
         self.paused = False
+
+        # Connection popup content: connection frame + trigger frame
+        connection_popup_content = QWidget()
+        connection_popup_layout = QVBoxLayout(connection_popup_content)
+        connection_popup_layout.setContentsMargins(8, 8, 8, 8)
+        connection_popup_layout.addWidget(connection_frame)
+        connection_popup_layout.addWidget(self.trigger_frame)
+        self.connection_popup = ConnectionPopup(connection_popup_content, self)
+
+        # Sidebar: Connect, Disconnect, Pause, Speed, Interval only
+        ip_connect_layout = QHBoxLayout()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.setCursor(Qt.PointingHandCursor)
+        self.connect_btn.setStyleSheet("""
+            QPushButton { background-color: #1a6fa5; color: white; font-weight: bold; padding: 5px; border: none; border-radius: 3px; }
+            QPushButton:hover { background-color: #2580b8; }
+            QPushButton:pressed { background-color: #0d5a8a; }
+        """)
+        self.disconnect_btn = QPushButton("Disconnect")
+        self.disconnect_btn.setCursor(Qt.PointingHandCursor)
+        self.disconnect_btn.setEnabled(False)
+        self.disconnect_btn.setStyleSheet("""
+            QPushButton { background-color: #6b2d2d; color: #e8e8e8; font-weight: bold; padding: 5px; border: 1px solid #5a2525; border-radius: 3px; }
+            QPushButton:hover { background-color: #7a3535; }
+            QPushButton:pressed { background-color: #5a2020; }
+            QPushButton:disabled { background-color: #3a3a3a; color: #707070; border-color: #2d2d30; }
+        """)
+        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn.setCursor(Qt.PointingHandCursor)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setToolTip("Pause live updates. Values stay as-is so you can zoom, pan, or export.")
+        self.pause_btn.setStyleSheet("""
+            QPushButton { background-color: #4a4a4a; color: #e0e0e0; font-weight: bold; padding: 5px; border: 1px solid #3e3e42; border-radius: 3px; }
+            QPushButton:hover { background-color: #5a5a5a; }
+            QPushButton:pressed { background-color: #3a3a3a; }
+            QPushButton:disabled { background-color: #3a3a3a; color: #707070; border-color: #2d2d30; }
+        """)
+        ip_connect_layout.addWidget(self.connect_btn)
+        ip_connect_layout.addWidget(self.disconnect_btn)
+        ip_connect_layout.addWidget(self.pause_btn)
+
+        speed_layout = QHBoxLayout()
+        speed_label = QLabel("Speed (s):")
+        speed_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        speed_label.setFixedWidth(_label_w)
+        speed_label.setMinimumHeight(_row_h)
+        speed_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.speed_input = QLineEdit("0.05")
+        self.speed_input.setStyleSheet("background-color: #444; color: white; border: 1px solid #555; padding: 5px;")
+        self.speed_input.setMinimumHeight(_row_h)
+        self.speed_input.setToolTip("Communication cycle time in seconds (default: 0.05)")
+        speed_layout.addWidget(speed_label)
+        speed_layout.addWidget(self.speed_input)
+
+        sidebar_controls_frame = QFrame()
+        sidebar_controls_frame.setStyleSheet("""
+            QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 3px; margin-top: 6px; }
+        """)
+        sidebar_controls_layout = QVBoxLayout(sidebar_controls_frame)
+        sidebar_controls_layout.setContentsMargins(8, 6, 8, 8)
+        sidebar_controls_layout.setSpacing(6)
+        sidebar_controls_layout.addLayout(ip_connect_layout)
+        sidebar_controls_layout.addLayout(speed_layout)
+        sidebar_controls_layout.addWidget(self.recording_interval_row_widget)
+        self.sidebar_interval_row = self.recording_interval_row_widget
+        self.sidebar_layout.addWidget(sidebar_controls_frame)
         self.pause_btn.clicked.connect(self.toggle_pause)
 
-        online_layout.addWidget(self.trigger_frame)
-        self.sidebar_layout.addWidget(self.online_panel)
-
-        # Offline panel: Load CSV or Recording DB + history (shown when Offline Data)
+        # Offline panel: Load CSV or Recording DB + history (for Load popup)
         self.offline_panel = QWidget()
         offline_main = QVBoxLayout(self.offline_panel)
         offline_main.setContentsMargins(0, 5, 0, 0)
@@ -3059,8 +3098,7 @@ class MainWindow(QMainWindow):
         self.offline_memory_label.setWordWrap(True)
         offline_main.addWidget(self.offline_memory_label)
 
-        self.offline_panel.setVisible(False)
-        self.sidebar_layout.addWidget(self.offline_panel)
+        self.load_popup = LoadPopup(self.offline_panel, self)
 
         # Offline state: DuckDB connection and column list (set when CSV loaded)
         self.offline_db = None
@@ -3159,7 +3197,6 @@ class MainWindow(QMainWindow):
         self.status_signal.connect(self.update_comm_status)
         self.speed_input.editingFinished.connect(self.update_speed_while_connected)
         self.on_device_type_changed(self.device_type_combo.currentText())
-        self.on_data_mode_changed(self.data_mode_combo.currentText())
         self._update_variable_path_display()
         self._load_last_config()
         self._during_init = False
@@ -3459,25 +3496,33 @@ class MainWindow(QMainWindow):
         s.setValue("trigger_section_collapsed", is_visible)
         s.sync()
 
-    def on_data_mode_changed(self, mode_text):
-        """Switch between Online Data (real-time) and Offline Data (CSV/DuckDB)."""
-        if mode_text == "Offline Data":
-            self.online_panel.setVisible(False)
-            self.offline_panel.setVisible(True)
-            # Clear variable list until user loads a file
+    def _unload_offline_data(self):
+        """Unload offline DuckDB/CSV and clear variable list for Online mode."""
+        if self.offline_db:
+            try:
+                self.offline_db.close()
+            except Exception:
+                pass
+            self.offline_db = None
+        self.offline_csv_path = None
+        self.offline_columns = []
+        self.offline_path_label.setText("No file loaded")
+        self.offline_memory_label.setText("")
+
+    def _set_offline_mode(self, active):
+        """Set offline mode and update sidebar + variable list."""
+        self._offline_mode_active = active
+        self._update_sidebar_for_mode()
+        if active:
             self.var_list.clear()
             self.all_variables = []
             if self.offline_columns:
                 for c in self.offline_columns:
                     self.var_list.addItem(c)
                 self.all_variables = list(self.offline_columns)
-            # Populate recording history
             self._refresh_offline_history()
-        else:
-            self.online_panel.setVisible(True)
-            self.offline_panel.setVisible(False)
-            if not getattr(self, "_during_init", False):
-                self.load_variables()
+        elif not getattr(self, "_during_init", False):
+            self.load_variables()
 
     def on_device_type_changed(self, device_type):
         """Show/hide address rows and update labels by Client Device Type (Snap7, ADS, Simulation)."""
@@ -3485,13 +3530,19 @@ class MainWindow(QMainWindow):
             self.address_row.setVisible(False)
             self.pc_ip_row.setVisible(False)
             self.recording_section.setVisible(False)
+            if hasattr(self, "sidebar_interval_row"):
+                self.sidebar_interval_row.setVisible(False)
         else:
             self.address_row.setVisible(True)
             if device_type == "Snap7":
                 self.recording_section.setVisible(True)
+                if hasattr(self, "sidebar_interval_row"):
+                    self.sidebar_interval_row.setVisible(True)
                 self._on_recording_ref_changed()
             else:
                 self.recording_section.setVisible(False)
+                if hasattr(self, "sidebar_interval_row"):
+                    self.sidebar_interval_row.setVisible(False)
             if device_type == "ADS":
                 self.address_label.setText("Target (PLC):")
                 self.ip_input.setPlaceholderText("192.168.1.10.1.1")
@@ -3578,6 +3629,15 @@ class MainWindow(QMainWindow):
 
     def _load_duckdb_recording(self, db_path):
         """Load a .duckdb recording file (read-only) and populate variables for offline plotting."""
+        if (self.plc_thread and self.plc_thread.is_alive()) or (self.ads_thread and self.ads_thread.is_alive()) or (self.simulator_thread and self.simulator_thread.isRunning()):
+            reply = QMessageBox.question(
+                self, "Disconnect to Load Offline?",
+                "Disconnect from PLC/simulation to load offline data?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.disconnect_plc()
         try:
             if self.offline_db:
                 try:
@@ -3686,6 +3746,7 @@ class MainWindow(QMainWindow):
 
             self._update_ram_label()  # Refresh RAM indicator after load
             self._show_toast(f"Loaded {fname} — {len(var_names)} vars, {row_count:,} rows", 4000)
+            self._set_offline_mode(True)
         except Exception as e:
             logging.error(f"Failed to load DuckDB recording: {e}")
             QMessageBox.warning(
@@ -3704,6 +3765,15 @@ class MainWindow(QMainWindow):
 
     def load_offline_csv(self):
         """Load a user-selected CSV into DuckDB and populate variable list for offline plotting."""
+        if (self.plc_thread and self.plc_thread.is_alive()) or (self.ads_thread and self.ads_thread.is_alive()) or (self.simulator_thread and self.simulator_thread.isRunning()):
+            reply = QMessageBox.question(
+                self, "Disconnect to Load Offline?",
+                "Disconnect from PLC/simulation to load offline data?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.disconnect_plc()
         path, _ = QFileDialog.getOpenFileName(
             self, "Select CSV file", "", "CSV (*.csv);;All files (*)"
         )
@@ -3761,6 +3831,7 @@ class MainWindow(QMainWindow):
             self._update_offline_memory_label(csv_size, row_count)
             self._update_ram_label()  # Refresh RAM indicator after load
             self._show_toast(f"Loaded {os.path.basename(path)} — {len(self.offline_columns)} columns", 4000)
+            self._set_offline_mode(True)
         except Exception as e:
             logging.error(f"Failed to load CSV into DuckDB: {e}")
             QMessageBox.warning(
@@ -3781,7 +3852,13 @@ class MainWindow(QMainWindow):
         if (self.plc_thread and self.plc_thread.is_alive()) or (self.ads_thread and self.ads_thread.is_alive()) or (self.simulator_thread and self.simulator_thread.isRunning()):
             QMessageBox.warning(self, "Connection Active", "Already connected or in simulation mode.")
             return
-        
+        if self._offline_mode_active:
+            QMessageBox.warning(self, "Offline Mode", "Close Offline Data and open Connection first.")
+            return
+
+        # Unload offline data when switching to Online (Connect)
+        self._unload_offline_data()
+
         device_type = self.device_type_combo.currentText()
         
         # Clean up any existing thread first
@@ -4419,6 +4496,9 @@ class MainWindow(QMainWindow):
 
         # ── File ──
         file_menu = mb.addMenu("File")
+        file_menu.addAction("Connect...", self._open_connection_popup)
+        file_menu.addAction("Load...", self._open_load_popup)
+        file_menu.addSeparator()
         file_menu.addAction("Export Graph Data to CSV", self._menu_export_csv)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
@@ -4477,6 +4557,47 @@ class MainWindow(QMainWindow):
         else:
             self.sidebar.show()
             self._toggle_sidebar_action.setText("Hide Sidebar")
+
+    def _open_connection_popup(self):
+        """Open Connection popup (Online data). If Load popup is open, ask to close it first."""
+        if self.load_popup and self.load_popup.isVisible():
+            reply = QMessageBox.question(
+                self, "Switch to Online Data",
+                "Close Offline Data to open Connection?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.load_popup.hide()
+        self._offline_mode_active = False
+        self._update_sidebar_for_mode()
+        self.connection_popup.show()
+        self.connection_popup.raise_()
+        self.connection_popup.activateWindow()
+
+    def _open_load_popup(self):
+        """Open Load popup (Offline Data). If Connection popup is open, ask to close it first."""
+        if self.connection_popup and self.connection_popup.isVisible():
+            reply = QMessageBox.question(
+                self, "Switch to Offline Data",
+                "Close Connection to open Offline Data?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.connection_popup.hide()
+        self.load_popup.show()
+        self.load_popup.raise_()
+        self.load_popup.activateWindow()
+
+    def _update_sidebar_for_mode(self):
+        """Gray out Connect, Disconnect, Pause, Speed, Interval when Offline data is selected."""
+        gray = self._offline_mode_active
+        for w in (self.connect_btn, self.disconnect_btn, self.pause_btn, self.speed_input):
+            if w:
+                w.setEnabled(not gray)
+        if hasattr(self, "sidebar_interval_row") and self.sidebar_interval_row:
+            self.sidebar_interval_row.setEnabled(not gray)
 
     def _set_graph_background(self, mode):
         """Set graph/analytics background to 'dark' or 'light' and apply to all."""
@@ -4694,8 +4815,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(sep)
 
         # ── Description ──
-        desc = QLabel("PLC monitoring, real-time graph visualization\n& advanced analytics tool.\n-Siemens, Beckhoff, STM32-")
+        desc = QLabel(
+            "PLC monitoring, real-time graph visualization<br>& advanced analytics tool.<br>"
+            '<span style="font-style: italic; color: #8a8a8a;">- Siemens, Beckhoff, STM32 -</span>'
+        )
         desc.setAlignment(Qt.AlignCenter)
+        desc.setTextFormat(Qt.TextFormat.RichText)
         desc.setWordWrap(True)
         desc.setStyleSheet("""
             background: transparent;
@@ -4893,7 +5018,7 @@ class MainWindow(QMainWindow):
         if not selected_items:
             return
         var_names = [item.text() for item in selected_items]
-        is_offline = self.data_mode_combo.currentText() == "Offline Data"
+        is_offline = self._offline_mode_active
         if is_offline:
             if not self.offline_db or not self.offline_columns:
                 QMessageBox.warning(self, "No data", "Load a CSV or recording DB first (Offline Data).")
@@ -5204,7 +5329,7 @@ class MainWindow(QMainWindow):
             self.graphs.clear()
         
         # Create graphs from configuration
-        is_offline = self.data_mode_combo.currentText() == "Offline Data"
+        is_offline = self._offline_mode_active
         loaded_count = 0
         
         for config in graph_configs:
