@@ -1,5 +1,9 @@
 # Virtual environment
 venv/
+.venv/
+
+# Environment (API keys, secrets)
+.env
 
 # Build artifacts
 build/
