@@ -10,6 +10,9 @@ build/
 dist/
 *.spec
 
+# Debug logs
+grafcet_nlp_debug.log
+
 # Python
 __pycache__/
 *.pyc

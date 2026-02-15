@@ -1,0 +1,4 @@
+# Optional: for NLP prompt generation in Grafcet view
+# Install in your venv: pip install -r requirements-gemini.txt
+# Set GEMINI_API_KEY or GOOGLE_API_KEY in .env or environment
+google-genai
