@@ -89,6 +89,7 @@ if not exist "dist\DecAutomationApp\_internal\shared\title_bar.py" echo [WARN] M
 if not exist "dist\DecAutomationApp\_internal\monitoring\main_window.py" echo [WARN] Missing: _internal\monitoring\main_window.py & set MISSING=1
 if not exist "dist\DecAutomationApp\_internal\step7_exchange\main.py" echo [WARN] Missing: _internal\step7_exchange\main.py & set MISSING=1
 if not exist "dist\DecAutomationApp\_internal\st_block\main.py" echo [WARN] Missing: _internal\st_block\main.py & set MISSING=1
+if not exist "dist\DecAutomationApp\_internal\hmi_plc\main.py" echo [WARN] Missing: _internal\hmi_plc\main.py & set MISSING=1
 if %MISSING%==0 echo [OK] All critical files verified in bundle.
 echo.
 

@@ -1,0 +1,11 @@
+DATA_BLOCK "DB_{FB_NAME}_PLC_To_HMI"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0
+// PLC writes: FB outputs (HMI reads)
+NON_RETAIN
+   STRUCT 
+{VARIABLES}
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

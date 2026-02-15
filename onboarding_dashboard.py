@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QFont, QBrush
 
 from shared.title_bar import CustomTitleBar, get_app_icon, get_project_root
+from shared.frameless_resize import FramelessResizeMixin
 
 
 def _project_root():
@@ -21,8 +22,8 @@ def _project_root():
     return get_project_root()
 
 
-def _tile_image(path: str, fallback_color: str, size: int = 120) -> QPixmap:
-    """Load tile image from path, or create a colored placeholder."""
+def _tile_image(path: str, fallback_color: str, width: int = 200, height: int = 100) -> QPixmap:
+    """Load tile image from path, or create a colored placeholder. Rectangular aspect."""
     to_try = [path] if path else []
     if path and not os.path.isfile(path):
         base, ext = os.path.splitext(path)
@@ -31,15 +32,15 @@ def _tile_image(path: str, fallback_color: str, size: int = 120) -> QPixmap:
         if p and os.path.isfile(p):
             pix = QPixmap(p)
             if not pix.isNull():
-                return pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-    # Fallback: draw a colored square
-    pix = QPixmap(size, size)
+                return pix.scaled(width, height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    # Fallback: draw a colored rounded rectangle
+    pix = QPixmap(width, height)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setBrush(QBrush(QColor(fallback_color)))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 4, size - 8, size - 8, 8, 8)
+    painter.drawRoundedRect(4, 4, width - 8, height - 8, 6, 6)
     painter.end()
     return pix
 
@@ -59,46 +60,50 @@ class DashboardTile(QFrame):
         self._is_loading = False
         self._is_running = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(280, 320)
+        self.setMinimumSize(200, 220)
+        self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
         self.setStyleSheet("""
             DashboardTile {
-                background-color: #2d2d30;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2a2a2e, stop:1 #1f1f23);
                 border: 1px solid #3e3e42;
-                border-radius: 12px;
+                border-radius: 10px;
             }
             DashboardTile:hover {
-                background-color: #3e3e42;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #353539, stop:1 #2a2a2e);
                 border-color: #007ACC;
             }
             DashboardTile[disabled="true"] {
-                background-color: #252526;
+                background: #252526;
                 border-color: #555555;
             }
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
-        # Image
+        # Image - rectangular, larger, centered
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.img_label.setPixmap(_tile_image(image_path, fallback_color))
-        self.img_label.setFixedHeight(120)
-        layout.addWidget(self.img_label)
+        self.img_label.setPixmap(_tile_image(image_path, fallback_color, width=200, height=100))
+        self.img_label.setFixedSize(200, 100)
+        self.img_label.setStyleSheet("background-color: #1a1a1e; border-radius: 6px;")
+        layout.addWidget(self.img_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Title
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: bold;")
+        self.title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         self.title_label.setWordWrap(True)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title_label)
 
         # Description
         self.desc_label = QLabel(description)
-        self.desc_label.setStyleSheet("color: #b0b0b0; font-size: 12px;")
+        self.desc_label.setStyleSheet("color: #9e9e9e; font-size: 11px;")
         self.desc_label.setWordWrap(True)
         self.desc_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        self.desc_label.setMinimumHeight(60)
+        self.desc_label.setMinimumHeight(44)
         layout.addWidget(self.desc_label, 1)
 
         # Status label (Loading.. / Running..)
@@ -109,7 +114,7 @@ class DashboardTile(QFrame):
 
         # Loading overlay (stacked on top of tile)
         self._loading_overlay = QWidget(self)
-        self._loading_overlay.setStyleSheet("background-color: rgba(30,30,30,0.9); border-radius: 12px;")
+        self._loading_overlay.setStyleSheet("background-color: rgba(22,22,26,0.92); border-radius: 10px;")
         self._loading_overlay.hide()
         overlay_layout = QVBoxLayout(self._loading_overlay)
         overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -134,6 +139,7 @@ class DashboardTile(QFrame):
         self._is_loading = loading
         self._loading_overlay.setGeometry(self.rect())
         self._loading_overlay.setVisible(loading)
+        self._dashboard.on_app_loading(self._app_module, loading)
         if loading:
             self._loading_overlay.raise_()
             self.setCursor(Qt.CursorShape.WaitCursor)
@@ -184,6 +190,10 @@ class DashboardTile(QFrame):
             script = os.path.join(root, "step7_exchange", "main.py")
         elif self._app_module == "st_block":
             script = os.path.join(root, "st_block", "main.py")
+        elif self._app_module == "hmi_plc":
+            script = os.path.join(root, "hmi_plc", "main.py")
+        elif self._app_module == "block_station_generator":
+            script = os.path.join(root, "block_station_generator", "main.py")
         else:
             self.set_loading(False)
             return
@@ -226,13 +236,27 @@ class DashboardTile(QFrame):
                 from main import STBlockWindow
                 win = STBlockWindow()
                 win.show()
+            elif self._app_module == "hmi_plc":
+                hmi_dir = os.path.join(root, "hmi_plc")
+                if hmi_dir not in sys.path:
+                    sys.path.insert(0, hmi_dir)
+                from main import HmiPlcMainWindow
+                win = HmiPlcMainWindow()
+                win.show()
+            elif self._app_module == "block_station_generator":
+                bs_dir = os.path.join(root, "block_station_generator")
+                if bs_dir not in sys.path:
+                    sys.path.insert(0, bs_dir)
+                from main import BlockStationGeneratorWindow
+                win = BlockStationGeneratorWindow()
+                win.show()
             self._dashboard.on_app_launched(self._app_module, self, window=win)
         except Exception as e:
             QMessageBox.warning(self, "Launch Error", str(e))
             self.set_loading(False)
 
 
-class OnboardingDashboard(QMainWindow):
+class OnboardingDashboard(FramelessResizeMixin, QMainWindow):
     """Main onboarding dashboard window with three application tiles."""
 
     def __init__(self, parent=None):
@@ -244,17 +268,23 @@ class OnboardingDashboard(QMainWindow):
             self.setWindowIcon(icon)
         self.setMinimumSize(700, 500)
         self.resize(900, 550)
-        self.setStyleSheet("QMainWindow { background-color: #1e1e1e; }")
+        self.setStyleSheet("""
+            QMainWindow {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #16161a, stop:0.5 #1a1a1f, stop:1 #151518);
+            }
+        """)
 
         # Track open apps: module -> {tile, window or process}
         self._open_apps = {}
+        self._loading_apps = set()  # modules currently loading
         self._process_check_timer = QTimer(self)
         self._process_check_timer.timeout.connect(self._check_processes)
         self._process_check_timer.start(1000)
 
         # Root layout: title bar + content
         root = QWidget()
-        root.setStyleSheet("QWidget#_rootWidget { border: 1px solid #3e3e42; }")
+        root.setStyleSheet("QWidget#_rootWidget { border: 1px solid #2d2d30; background: transparent; }")
         root.setObjectName("_rootWidget")
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(1, 0, 1, 1)
@@ -270,15 +300,29 @@ class OnboardingDashboard(QMainWindow):
 
         # Content
         central = QWidget()
+        central.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(central)
         layout.setContentsMargins(40, 40, 40, 40)
 
         # Subtitle (title is in CustomTitleBar)
         subtitle = QLabel("Select an application to launch")
-        subtitle.setStyleSheet("color: #808080; font-size: 14px;")
+        subtitle.setStyleSheet("color: #6e6e73; font-size: 13px;")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
         layout.addSpacing(30)
+
+        # Scroll area for tiles - prevents overlap when window is small
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        scroll_content.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
 
         # Tiles grid
         proj_root = _project_root()
@@ -309,10 +353,26 @@ class OnboardingDashboard(QMainWindow):
                 "color": "#9C27B0",
                 "module": "st_block",
             },
+            {
+                "title": "HMI-PLC",
+                "display_name": "HMI-PLC",
+                "description": "Interactive HMI screens for PLC control. Load Exchange, Recipes, and Requests CSVs. Create tabbed HMI projects with valves, tanks, and controls.",
+                "image": os.path.join(images_dir, "DEC_HMI_PLC.png"),
+                "color": "#E65100",
+                "module": "hmi_plc",
+            },
+            {
+                "title": "Block/Station Generator",
+                "display_name": "Block/Station Generator",
+                "description": "Generate or modify blocks and stations. Stations are systems; blocks are subsystems. Focus: stepper (GRAFCET) in function blocks. Templates for Blocks and Stations.",
+                "image": os.path.join(images_dir, "DEC_BlockStation.png"),
+                "color": "#00BCD4",
+                "module": "block_station_generator",
+            },
         ]
 
-        grid = QGridLayout()
-        grid.setSpacing(24)  # Padding between the 3 dashboards
+        grid = QGridLayout(scroll_content)
+        grid.setSpacing(16)
         for i, t in enumerate(tiles_config):
             tile = DashboardTile(
                 title=t["title"],
@@ -323,14 +383,32 @@ class OnboardingDashboard(QMainWindow):
                 display_name=t["display_name"],
                 dashboard=self,
             )
-            grid.addWidget(tile, 0, i)
-        layout.addLayout(grid, 1)
+            grid.addWidget(tile, i // 2, i % 2)
+            grid.setRowStretch(i // 2, 1)
+        for c in range(2):
+            grid.setColumnStretch(c, 1)
 
-        # Status bar: "Monitoring - Running.." when an app is open
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area, 1)
+
+        # Status bar: only visible when apps are running in background
+        self._status_bar_frame = QFrame()
+        self._status_bar_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #252528, stop:1 #1e1e21);
+                border-top: 1px solid #2d2d30;
+                padding: 6px 12px;
+            }
+        """)
+        self._status_bar_frame.setFixedHeight(32)
+        status_bar_layout = QHBoxLayout(self._status_bar_frame)
+        status_bar_layout.setContentsMargins(12, 4, 12, 4)
         self._status_bar = QLabel("")
         self._status_bar.setStyleSheet("color: #4CAF50; font-size: 12px;")
-        self._status_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._status_bar)
+        status_bar_layout.addWidget(self._status_bar)
+        self._status_bar_frame.hide()  # Hidden until an app is running
+        layout.addWidget(self._status_bar_frame)
 
         root_layout.addWidget(central, 1)
         self.setCentralWidget(root)
@@ -358,18 +436,29 @@ class OnboardingDashboard(QMainWindow):
             except Exception:
                 pass
 
-    def _update_status_bar(self):
-        """Update status bar to show all running apps."""
-        running = [
-            entry["tile"]._display_name
-            for entry in self._open_apps.values()
-            if self._is_entry_running(entry)
-        ]
-        if running:
-            self._status_bar.setText(" • ".join(running) + " - Running..")
-            self._status_bar.setStyleSheet("color: #4CAF50; font-size: 12px;")
+    def on_app_loading(self, module: str, loading: bool):
+        """Track when an app is loading."""
+        if loading:
+            self._loading_apps.add(module)
         else:
-            self._status_bar.setText("")
+            self._loading_apps.discard(module)
+        self._update_status_bar()
+
+    def _update_status_bar(self):
+        """Show Loading or Loaded. Visible only when an app is loading or loaded."""
+        if self._loading_apps:
+            self._status_bar.setText("Loading...")
+            self._status_bar.setStyleSheet("color: #007ACC; font-size: 12px;")
+            self._status_bar_frame.show()
+        else:
+            running = any(self._is_entry_running(e) for e in self._open_apps.values())
+            if running:
+                self._status_bar.setText("Loaded")
+                self._status_bar.setStyleSheet("color: #4CAF50; font-size: 12px;")
+                self._status_bar_frame.show()
+            else:
+                self._status_bar.setText("")
+                self._status_bar_frame.hide()
 
     def _is_entry_running(self, entry) -> bool:
         if "window" in entry and entry["window"] is not None:

@@ -1,0 +1,27 @@
+TYPE "{STATUS_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Status outputs
+// Replace {STATUS_UDT} with block name, e.g. UDT_MPTS_Status
+//
+// Mode: 0=Disabled/Startup, 1=Idle, 2=Manual, 3=Running (block-specific), 4=Halt, 5=Alarm, 6=Fault, 7=Reset
+//       Block-specific modes (e.g. Charging, Discharging, Unclogging, Venting, Cleaning, LeakTesting) use 10+
+//
+// AlarmCode: DWord bitmask - each bit = one alarm source (bit0=Alarm1, bit1=Alarm2, etc.)
+// ErrorCode: Int - 0=None, 1=E_Stop, 2=ToleranceTimeout, etc. (block-specific)
+// StepBeforeTrigger: Last step before Alarm/Halt/Fault override; used for recovery display
+//-------------------------------------------------
+   STRUCT
+      Busy : Bool := FALSE;
+      Done : Bool := FALSE;
+      Step : Int;
+      Error : Bool := FALSE;
+      Alarm : Bool := FALSE;
+      Mode : Int := 0;
+      AlarmCode : DWord := 0;   // Bitmask for multiple alarms
+      ErrorCode : Int := 0;     // 0=None, block-specific codes for multiple issues
+      StepBeforeTrigger : Int := 0;   // Recovery step for HMI/recovery display
+{STATUS_FIELDS}
+   END_STRUCT;
+
+END_TYPE

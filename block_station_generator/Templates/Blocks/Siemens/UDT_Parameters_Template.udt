@@ -1,0 +1,11 @@
+TYPE "{PARAM_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Block Parameters
+// Replace {PARAM_UDT} with block name, e.g. UDT_MPTS_Parameters
+//-------------------------------------------------
+   STRUCT
+{PARAM_FIELDS}
+   END_STRUCT;
+
+END_TYPE

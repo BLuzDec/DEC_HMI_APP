@@ -1,0 +1,31 @@
+FUNCTION "FC_{FB_NAME}_Caller" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+// Generated from {SOURCE} - HMI simulation FC
+// Reads from DB_HMI_To_PLC (control + simulated i*), calls FB, writes to DB_PLC_To_HMI
+
+   VAR_INPUT 
+      bEnable : Bool := TRUE;   // Enable FC execution
+   END_VAR
+
+   VAR_TEMP 
+      // (none)
+   END_VAR
+
+   VAR STATIC 
+      {FB_INSTANCE}
+   END_VAR
+
+BEGIN
+REGION Call FB from HMI DB
+
+	IF #bEnable THEN
+		// --- Call FB: inputs from DB_HMI (HMI writes control + simulated i*), in_out from DB_PLC ---
+		#{FB_INSTANCE_NAME}({FB_CALL_ARGS});
+
+		// --- Copy outputs and in_out to DB_PLC (HMI reads) ---
+{OUTPUT_ASSIGNMENTS}
+	END_IF;
+
+END_REGION
+END_FUNCTION

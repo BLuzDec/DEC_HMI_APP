@@ -1,0 +1,18 @@
+TYPE "{CMD_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Command inputs (operator / automation requests)
+// Replace {CMD_UDT} with block name, e.g. UDT_MPTS_Commands
+//-------------------------------------------------
+   STRUCT
+   Enable : BOOL;
+   Run : BOOL;
+   Manual : BOOL;
+   Ack : Bool;   // Clear alarm, allow return to Idle
+   Reset : Bool;   // Clear fault, allow restart (e.g. after E-Stop)
+   Stop : Bool;   // Go straight to IDLE
+   Halt : Bool;   // Go to S_HALT, freeze outputs, wait until False then return to StepBeforeTrigger
+{CMD_FIELDS}
+   END_STRUCT;
+
+END_TYPE

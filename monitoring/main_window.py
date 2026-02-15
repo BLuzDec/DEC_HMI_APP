@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                                QCheckBox, QLineEdit, QMessageBox, QFileDialog,
                                QTableWidget, QTableWidgetItem, QGroupBox, QHeaderView,
                                QDoubleSpinBox, QSpinBox, QDateTimeEdit, QRadioButton,
-                               QInputDialog, QMenuBar, QSizeGrip, QSizePolicy)
+                               QInputDialog, QMenuBar, QSizePolicy)
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSettings, QDateTime, QPoint
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QAction, QActionGroup
 import pyqtgraph as pg
@@ -29,6 +29,7 @@ from external.plc_simulator import PLCSimulator
 from external.variable_loader import load_exchange_and_recipes
 from external.analytics_window import AnalyticsWindow
 from shared.title_bar import CustomTitleBar, get_app_icon, get_project_root
+from shared.frameless_resize import FramelessResizeMixin
 
 
 # Color palette for limit lines (user can choose from these)
@@ -52,7 +53,7 @@ def _app_icon():
     return get_app_icon()
 
 
-class ConnectionPopup(QDialog):
+class ConnectionPopup(FramelessResizeMixin, QDialog):
     """Popup window for Connection configuration (Client, IP, Variable files, Recording, PLC Trigger)."""
     def __init__(self, content_widget, parent=None):
         super().__init__(parent)
@@ -60,18 +61,30 @@ class ConnectionPopup(QDialog):
         _icon = _app_icon()
         if not _icon.isNull():
             self.setWindowIcon(_icon)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(content_widget)
         self.setStyleSheet("""
-            QDialog { background-color: #2d2d30; }
+            QDialog {
+                background-color: #2d2d30;
+                border: 1px solid #3e3e42;
+            }
         """)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        title_bar = CustomTitleBar(
+            self,
+            title="Connection",
+            icon=_icon,
+            show_menu_bar=False,
+            show_window_controls=True,
+        )
+        root_layout.addWidget(title_bar)
+        root_layout.addWidget(content_widget)
         self.resize(420, 520)
 
 
-class LoadPopup(QDialog):
+class LoadPopup(FramelessResizeMixin, QDialog):
     """Popup window for Offline Data (Load CSV, Load Recording DB, Recording History)."""
     def __init__(self, content_widget, parent=None):
         super().__init__(parent)
@@ -79,14 +92,26 @@ class LoadPopup(QDialog):
         _icon = _app_icon()
         if not _icon.isNull():
             self.setWindowIcon(_icon)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(content_widget)
         self.setStyleSheet("""
-            QDialog { background-color: #2d2d30; }
+            QDialog {
+                background-color: #2d2d30;
+                border: 1px solid #3e3e42;
+            }
         """)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        title_bar = CustomTitleBar(
+            self,
+            title="Offline Data",
+            icon=_icon,
+            show_menu_bar=False,
+            show_window_controls=True,
+        )
+        root_layout.addWidget(title_bar)
+        root_layout.addWidget(content_widget)
         self.resize(380, 420)
 
 
@@ -2426,7 +2451,7 @@ class _GraphAreaWithBackground(QWidget):
         super().paintEvent(event)
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FramelessResizeMixin, QMainWindow):
     data_signal = Signal(str, object)
     status_signal = Signal(str, str, object)  # status_type, message, details
 
@@ -2470,15 +2495,6 @@ class MainWindow(QMainWindow):
 
         self.main_widget = QWidget()
         _root_layout.addWidget(self.main_widget, 1)
-        # Small resize grip in bottom-right corner
-        _grip = QSizeGrip(self)
-        _grip.setFixedSize(12, 12)
-        _grip.setStyleSheet("QSizeGrip { background: transparent; }")
-        _grip_row = QHBoxLayout()
-        _grip_row.setContentsMargins(0, 0, 0, 0)
-        _grip_row.addStretch()
-        _grip_row.addWidget(_grip)
-        _root_layout.addLayout(_grip_row)
         self.setCentralWidget(_root)
         self.main_layout = QHBoxLayout(self.main_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -4587,16 +4603,20 @@ class MainWindow(QMainWindow):
         self._load_graph_config()
 
     def _show_about(self):
-        """Show a stylish About dialog for the application."""
+        """Show a stylish About dialog for the application (generic frameless frame with CustomTitleBar)."""
         dlg = QDialog(self)
         dlg.setWindowTitle("About DecAutomation Studio")
-        dlg.setFixedSize(460, 420)
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.Window | Qt.FramelessWindowHint)
+        dlg.setFixedSize(460, 460)
+        _icon = _app_icon()
+        if not _icon.isNull():
+            dlg.setWindowIcon(_icon)
         dlg.setStyleSheet("""
             QDialog {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #1a1a2e, stop:0.5 #16213e, stop:1 #0f3460);
                 border: 1px solid #007ACC;
-                border-radius: 12px;
+                border-radius: 0;
             }
             QLabel {
                 border: none;
@@ -4608,11 +4628,26 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        layout = QVBoxLayout(dlg)
+        root_layout = QVBoxLayout(dlg)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # Generic frame: CustomTitleBar (icon, title, window controls)
+        title_bar = CustomTitleBar(
+            dlg,
+            title="About DecAutomation Studio",
+            icon=_icon,
+            show_menu_bar=False,
+            show_window_controls=True,
+        )
+        root_layout.addWidget(title_bar)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(30, 25, 30, 25)
         layout.setSpacing(0)
 
-        # ── App icon ──
+        # ── App icon (Dec logo) ──
         icon = _app_icon()
         if not icon.isNull():
             icon_label = QLabel()
@@ -4780,6 +4815,7 @@ class MainWindow(QMainWindow):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
+        root_layout.addWidget(content)
         dlg.exec()
 
     def load_variables(self):
@@ -5407,50 +5443,6 @@ class MainWindow(QMainWindow):
             x = (self.width() - self._toast_label.width()) // 2
             y = self.height() - self._toast_label.height() - 32
             self._toast_label.move(x, y)
-
-    # ── Frameless window edge-resizing (Windows native hit-test) ────────
-    _BORDER = 8  # pixels from edge that trigger resize
-
-    def nativeEvent(self, eventType, message):
-        """Handle Windows WM_NCHITTEST for edge/corner resize on frameless window."""
-        try:
-            import ctypes
-            import ctypes.wintypes
-            msg = ctypes.wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0084:  # WM_NCHITTEST
-                # Cursor position in physical screen pixels (signed 16-bit)
-                x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                # Use Win32 GetWindowRect so coordinates match lParam's space
-                # (avoids DPI logical-vs-physical pixel mismatch with Qt's frameGeometry)
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(msg.hWnd, ctypes.byref(rect))
-                b = self._BORDER
-                at_left   = x - rect.left < b
-                at_right  = rect.right - x < b
-                at_top    = y - rect.top < b
-                at_bottom = rect.bottom - y < b
-                # HTLEFT=10 HTRIGHT=11 HTTOP=12 HTTOPLEFT=13 HTTOPRIGHT=14
-                # HTBOTTOM=15 HTBOTTOMLEFT=16 HTBOTTOMRIGHT=17
-                if at_top and at_left:
-                    return True, 13
-                if at_top and at_right:
-                    return True, 14
-                if at_bottom and at_left:
-                    return True, 16
-                if at_bottom and at_right:
-                    return True, 17
-                if at_left:
-                    return True, 10
-                if at_right:
-                    return True, 11
-                if at_top:
-                    return True, 12
-                if at_bottom:
-                    return True, 15
-        except Exception:
-            pass
-        return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
         self._save_last_config()

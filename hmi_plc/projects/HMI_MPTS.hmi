@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "MPTS system simulation - FB_MPTS block view and visual valves",
+  "tabs": [
+    {
+      "name": "Block view",
+      "widgets": [
+        {
+          "type": "block_mpts",
+          "x": 20,
+          "y": 20
+        }
+      ]
+    },
+    {
+      "name": "Visual",
+      "widgets": [
+        {"type": "valve", "x": 80, "y": 120, "variable": "Inlet", "is_open": true},
+        {"type": "valve", "x": 80, "y": 220, "variable": "Outlet", "is_open": false},
+        {"type": "tank", "x": 200, "y": 150, "variable": "Chamber", "fill_level": 0.5},
+        {"type": "valve", "x": 350, "y": 180, "variable": "ChamberValve", "is_open": false},
+        {"type": "pump", "x": 450, "y": 100, "variable": "Vibrator"}
+      ]
+    }
+  ]
+}

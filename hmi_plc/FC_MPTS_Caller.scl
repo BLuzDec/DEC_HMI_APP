@@ -1,0 +1,60 @@
+FUNCTION "FC_MPTS_Caller" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+// Generated from FB_MPTS.scl - HMI simulation FC
+// Reads from DB_HMI_To_PLC (control + simulated i*), calls FB, writes to DB_PLC_To_HMI
+
+   VAR_INPUT 
+      bEnable : Bool := TRUE;   // Enable FC execution
+   END_VAR
+
+   VAR_TEMP 
+      // (none)
+   END_VAR
+
+   VAR STATIC 
+      fb_MPTS : "FB_MPTS";
+   END_VAR
+
+BEGIN
+REGION Call FB from HMI DB
+
+	IF #bEnable THEN
+		// --- Call FB: inputs from DB_HMI (HMI writes control + simulated i*), in_out from DB_PLC ---
+		#fb_MPTS(Cmd.Run := "DB_MPTS_HMI_To_PLC".Cmd_Run,
+			Cmd.Charge := "DB_MPTS_HMI_To_PLC".Cmd_Charge,
+			Cmd.Discharge := "DB_MPTS_HMI_To_PLC".Cmd_Discharge,
+			Cmd.Venting := "DB_MPTS_HMI_To_PLC".Cmd_Venting,
+			Cmd.Unclogging := "DB_MPTS_HMI_To_PLC".Cmd_Unclogging,
+			Cmd.LeakTest := "DB_MPTS_HMI_To_PLC".Cmd_LeakTest,
+			E_Stop := "DB_MPTS_HMI_To_PLC".E_Stop,
+			Alarm := "DB_MPTS_HMI_To_PLC".Alarm,
+			HeadInPosition := "DB_MPTS_HMI_To_PLC".HeadInPosition,
+			iChamberPressure := "DB_MPTS_HMI_To_PLC".iChamberPressure,
+			iInletValvePressure := "DB_MPTS_HMI_To_PLC".iInletValvePressure,
+			iOutletValvePressure := "DB_MPTS_HMI_To_PLC".iOutletValvePressure,
+			bStart_Stop_Operator := "DB_MPTS_PLC_To_HMI".bStart_Stop_Operator,
+			HMI_Data := "DB_MPTS_PLC_To_HMI".HMI_Data);
+
+		// --- Copy outputs and in_out to DB_PLC (HMI reads) ---
+		"DB_MPTS_PLC_To_HMI".St_Busy := #fb_MPTS.St.Busy;
+		"DB_MPTS_PLC_To_HMI".St_Charged := #fb_MPTS.St.Charged;
+		"DB_MPTS_PLC_To_HMI".St_Discharged := #fb_MPTS.St.Discharged;
+		"DB_MPTS_PLC_To_HMI".St_Done := #fb_MPTS.St.Done;
+		"DB_MPTS_PLC_To_HMI".St_Error := #fb_MPTS.St.Error;
+		"DB_MPTS_PLC_To_HMI".St_Alarm := #fb_MPTS.St.Alarm;
+		"DB_MPTS_PLC_To_HMI".St_Mode := #fb_MPTS.St.Mode;
+		"DB_MPTS_PLC_To_HMI".oInletValvePR := #fb_MPTS.oInletValvePR;
+		"DB_MPTS_PLC_To_HMI".oOutletValvePR := #fb_MPTS.oOutletValvePR;
+		"DB_MPTS_PLC_To_HMI".oChamberValvePR := #fb_MPTS.oChamberValvePR;
+		"DB_MPTS_PLC_To_HMI".oChamberValveOn := #fb_MPTS.oChamberValveOn;
+		"DB_MPTS_PLC_To_HMI".oVibratorPR := #fb_MPTS.oVibratorPR;
+		"DB_MPTS_PLC_To_HMI".oVibratorOn := #fb_MPTS.oVibratorOn;
+		"DB_MPTS_PLC_To_HMI".bToleranceFailureDetected := #fb_MPTS.bToleranceFailureDetected;
+		"DB_MPTS_PLC_To_HMI".iToleranceFailureSource := #fb_MPTS.iToleranceFailureSource;
+		"DB_MPTS_PLC_To_HMI".oFullRedValveOn := #fb_MPTS.oFullRedValveOn;
+		"DB_MPTS_PLC_To_HMI".oChamberVacuumValveOn := #fb_MPTS.oChamberVacuumValveOn;
+	END_IF;
+
+END_REGION
+END_FUNCTION

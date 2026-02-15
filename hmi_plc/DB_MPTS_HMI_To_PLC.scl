@@ -1,0 +1,22 @@
+DATA_BLOCK "DB_MPTS_HMI_To_PLC"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0
+// HMI writes: control inputs + simulated i* feedbacks (iChamberPressure, iInletValvePressure, iOutletValvePressure)
+NON_RETAIN
+   STRUCT 
+	Cmd_Run : Bool;
+	Cmd_Charge : Bool;
+	Cmd_Discharge : Bool;
+	Cmd_Venting : Bool;
+	Cmd_Unclogging : Bool;
+	Cmd_LeakTest : Bool;
+	E_Stop : Bool;
+	Alarm : Bool;
+	HeadInPosition : Bool;
+	iChamberPressure : Real;
+	iInletValvePressure : Real;
+	iOutletValvePressure : Real;
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

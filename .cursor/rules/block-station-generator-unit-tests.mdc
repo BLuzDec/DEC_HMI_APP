@@ -1,0 +1,48 @@
+---
+description: Unit tests required when creating states, inputs, or outputs in Block/Station Generator
+globs: block_station_generator/**/*
+alwaysApply: false
+---
+
+# Block/Station Generator – Unit Test Requirement
+
+When working in the **Block/Station Generator** dashboard (`block_station_generator/`):
+
+## Mandatory Unit Tests
+
+**Whenever you create or modify any of the following, you MUST add or update a corresponding unit test:**
+
+- **States** (e.g. GRAFCET/stepper states)
+- **Inputs** (function block inputs)
+- **Outputs** (function block outputs)
+
+## Implementation
+
+- Use **pytest** for unit tests.
+- Place tests in `block_station_generator/tests/` (or `tests/` next to the module under test).
+- Test file naming: `test_<module_name>.py`.
+- Each new state, input, or output should have at least one test case that verifies its existence and expected behavior.
+
+## Example
+
+```python
+# In block_station_generator/tests/test_stepper.py
+import pytest
+
+def test_stepper_states_exist():
+    """Verify all expected states are defined."""
+    from block_station_generator.stepper import STATES
+    assert "IDLE" in STATES
+    assert "RUNNING" in STATES
+
+def test_block_inputs_defined():
+    """Verify block inputs are correctly defined."""
+    from block_station_generator.block import Block
+    b = Block()
+    assert hasattr(b, "start")
+    assert hasattr(b, "stop")
+```
+
+## Purpose
+
+This ensures every change to states, inputs, or outputs is automatically validated by tests, reducing regressions and enabling safe refactoring.

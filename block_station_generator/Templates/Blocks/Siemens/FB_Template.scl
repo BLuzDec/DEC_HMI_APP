@@ -1,0 +1,181 @@
+FUNCTION_BLOCK "{BLOCK_NAME}"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+   VAR_INPUT 
+      Cmd : "{CMD_UDT}";
+      E_Stop : Bool;
+      Alarm : Bool;
+      Parameters : "{PARAM_UDT}";
+      Settings : "{SETTINGS_UDT}";
+      Timers : "{TIMERS_UDT}";
+{INPUTS}
+   END_VAR
+
+   VAR_OUTPUT 
+      St : "{STATUS_UDT}";
+{OUTPUTS}
+   END_VAR
+
+   VAR_IN_OUT
+      HMI_Data : "{HMI_UDT}";
+   END_VAR
+
+   VAR 
+      _Step : Int := #S0_START_UP; // Internal step tracking
+      PreviousStep : Int := #S0_START_UP;
+      StepBeforeTrigger : Int := #S0_START_UP; // Last step before Alarm/Halt override; used for recovery
+      bFirstStepCycle : Bool;
+      rtrigStop {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigReset {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigAck {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigHalt {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigRun {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      vStop : Bool := FALSE;
+      vReset : Bool := FALSE;
+      vAck : Bool := FALSE;
+      vHalt : Bool := FALSE;
+      vRun : Bool := FALSE;
+      _Mode : Int := #MODE_IDLE; // Set in each step; written to St.Mode
+      _AlarmCode : DWord := 0;   // Bitmask for multiple alarms (set in stepper / {STATUS_ALARM_CODE})
+      _ErrorCode : Int := 0;     // Error code for multiple issues (set in stepper / {STATUS_ERROR_CODE})
+{STATE_TONS}
+{VARS}
+   END_VAR
+
+{RETAIN_BLOCK}
+
+   VAR_TEMP 
+{VAR_TEMP}
+   END_VAR
+
+   VAR CONSTANT 
+      S0_START_UP : Int := 0;
+      S100_IDLE : Int := 100;
+      S996_RESET : Int := 996;
+      S997_HALT : Int := 997;
+      S998_ALARM : Int := 998;
+      S999_FAULT : Int := 999;
+      // Mode constants for St.Mode (operational / fault state)
+      MODE_DISABLED : Int := 0;
+      MODE_IDLE : Int := 1;
+      MODE_MANUAL : Int := 2;
+      MODE_RUNNING : Int := 3;
+      MODE_HALT : Int := 4;
+      MODE_ALARM : Int := 5;
+      MODE_FAULT : Int := 6;
+      MODE_RESET : Int := 7;
+{STATE_CONSTANTS}
+{MODE_CONSTANTS}
+   END_VAR
+
+
+BEGIN
+
+	//------------------------------ Initialize Local variables
+	#_Mode := #MODE_IDLE;
+	#_AlarmCode := 0;
+	#_ErrorCode := 0;
+
+   //------------------------------ Child / Multi-Instances (if any)
+{CHILD_INSTANCES}
+
+{MULTI_INSTANCES}
+
+	//------------------------------ Timers (state-dependent TONs)
+{STATE_TONS_LOGIC}
+
+	//------------------------------ Rising edge detection for Cmd triggers
+	#rtrigStop(CLK := #Cmd.Stop);
+	#rtrigReset(CLK := #Cmd.Reset);
+	#rtrigAck(CLK := #Cmd.Ack);
+	#rtrigHalt(CLK := #Cmd.Halt);
+	#rtrigRun(CLK := #Cmd.Run);
+{RISING_TRIGGERS}
+
+	//------------------------------ Latch command variables (stay TRUE until executed)
+	IF #rtrigStop.Q THEN #vStop := TRUE; END_IF;
+	IF #rtrigReset.Q THEN #vReset := TRUE; END_IF;
+	IF #rtrigAck.Q THEN #vAck := TRUE; END_IF;
+	IF #rtrigHalt.Q THEN #vHalt := TRUE; END_IF;
+	IF #rtrigRun.Q THEN #vRun := TRUE; END_IF;
+{V_CMD_LATCH}
+
+	//------------------------------ Alarm / E_Stop / Stop / Halt management (BEFORE: priority override)
+	IF #_Step <> #S998_ALARM AND #_Step <> #S999_FAULT AND #_Step <> #S997_HALT AND #_Step <> #S996_RESET THEN
+	    #StepBeforeTrigger := #_Step;
+	END_IF;
+	IF #E_Stop THEN
+	    #_Step := #S999_FAULT;
+	ELSIF #Alarm THEN
+	    #_Step := #S998_ALARM;
+	ELSIF #vStop THEN
+	    #_Step := #S100_IDLE;
+	    #vStop := FALSE;
+	ELSIF #vHalt THEN
+	    #_Step := #S997_HALT;
+	END_IF;
+
+	//------------------------------ Other conditions (block-specific)
+{OTHER_CONDITIONS}
+
+	//------------------------------ Stepper / GRAFCET
+	IF #_Step <> #PreviousStep THEN
+	    #bFirstStepCycle := TRUE;
+	    #PreviousStep := #_Step;
+	ELSE
+	    #bFirstStepCycle := FALSE;
+	END_IF;
+	
+	CASE #_Step OF
+{STEPPER_LOGIC}
+	    // ---------------------------------------------------------------------------------
+	    #S997_HALT:
+	        #_Mode := #MODE_HALT;
+	        {HALT_KEEP_OUTPUTS}
+	        IF NOT #Cmd.Halt THEN
+	            #vHalt := FALSE;
+	            #_Step := #StepBeforeTrigger;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S999_FAULT:
+	        #_Mode := #MODE_FAULT;
+	        #_ErrorCode := 1;   // Default: E_Stop. For multiple issues: set from block-specific error sources
+	        {STATUS_ERROR_CODE}
+	        {FAULT_SAFE_OUTPUTS}
+	        IF NOT #E_Stop AND #vAck THEN
+	            #vAck := FALSE;
+	            #_Step := #S100_IDLE;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S996_RESET:
+	        #_Mode := #MODE_RESET;
+	        {RESET_LOGIC}
+	    // ---------------------------------------------------------------------------------
+	    #S998_ALARM:
+	        #_Mode := #MODE_ALARM;
+	        #_AlarmCode := 1;   // Default: single alarm (bit0). For multiple: #_AlarmCode := (Alarm1 SHL 0) OR (Alarm2 SHL 1) OR ...;
+	        {STATUS_ALARM_CODE}
+	        {ALARM_SAFE_OUTPUTS}
+	        IF NOT #Alarm AND #vAck THEN
+	            #vAck := FALSE;
+	            IF #StepBeforeTrigger = #S997_HALT THEN
+	                #_Step := #S100_IDLE;
+	            ELSE
+	                #_Step := #StepBeforeTrigger;
+	            END_IF;
+	        END_IF;
+	END_CASE;
+
+	//------------------------------ Write Local variables to Outputs
+	St.Step := #_Step;
+	St.Error := (#_Step = #S999_FAULT);
+	St.Alarm := (#_Step = #S998_ALARM);
+	St.StepBeforeTrigger := #StepBeforeTrigger;
+	St.AlarmCode := #_AlarmCode;
+	St.ErrorCode := #_ErrorCode;
+	St.Mode := #_Mode;
+
+	//------------------------------ HMI Data transfer
+{HMI_TRANSFER}
+	
+END_FUNCTION_BLOCK

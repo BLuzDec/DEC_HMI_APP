@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, QUrl, QSettings
 from PySide6.QtGui import QDesktopServices
 
 from shared.title_bar import CustomTitleBar, get_app_icon
+from shared.frameless_resize import FramelessResizeMixin
 
 
 def _default_exchange_path():
@@ -100,7 +101,7 @@ def _dark_message(parent, title: str, text: str, icon=QMessageBox.Icon.Informati
     return mb.exec()
 
 
-class Step7ExchangeWindow(QMainWindow):
+class Step7ExchangeWindow(FramelessResizeMixin, QMainWindow):
     """Window for Step7 Exchange blocks generation."""
 
     def __init__(self, parent=None):

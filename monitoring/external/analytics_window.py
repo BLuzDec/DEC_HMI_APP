@@ -25,6 +25,7 @@ if _root not in sys.path:
     sys.path.insert(0, _root)
 
 from shared.title_bar import get_app_icon
+from shared.frameless_resize import FramelessResizeMixin
 
 
 def resource_path(relative_path):
@@ -157,7 +158,7 @@ class _AnalyticsTitleBar(QWidget):
             self._title_label.setStyleSheet(f"color: {fg}; font-size: 12px; background: transparent;")
 
 
-class AnalyticsWindow(QWidget):
+class AnalyticsWindow(FramelessResizeMixin, QWidget):
     """Analytics window with time-series tracking of metrics."""
     
     MAX_HISTORY = 500  # Max points to keep in history
@@ -217,17 +218,7 @@ class AnalyticsWindow(QWidget):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
         root_layout.addWidget(content, 1)
-        # Resize grip in bottom-right corner
-        from PySide6.QtWidgets import QSizeGrip
-        _grip = QSizeGrip(self)
-        _grip.setFixedSize(12, 12)
-        _grip.setStyleSheet("QSizeGrip { background: transparent; }")
-        _grip_row = QHBoxLayout()
-        _grip_row.setContentsMargins(0, 0, 0, 0)
-        _grip_row.addStretch()
-        _grip_row.addWidget(_grip)
-        root_layout.addLayout(_grip_row)
-        
+
         # Header
         header_layout = QHBoxLayout()
         title_label = QLabel("Graph Analytics")
@@ -1717,48 +1708,6 @@ class AnalyticsWindow(QWidget):
         colors = ["#78B674", "#86B870", "#96BA6D", "#A8BC6B", "#BAAD66", "#BC9B5E", "#BE8657", "#C07152", "#C2584D"]
         return colors[min(int(ratio * (len(colors) - 1)), len(colors) - 1)]
     
-    # ── Frameless window edge-resizing (Windows native hit-test) ────────
-    _BORDER = 8
-
-    def nativeEvent(self, eventType, message):
-        """Handle Windows WM_NCHITTEST for edge/corner resize on frameless window."""
-        try:
-            import ctypes
-            import ctypes.wintypes
-            msg = ctypes.wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0084:  # WM_NCHITTEST
-                # Cursor position in physical screen pixels (signed 16-bit)
-                x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                # Use Win32 GetWindowRect so coordinates match lParam's space
-                # (avoids DPI logical-vs-physical pixel mismatch with Qt's frameGeometry)
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(msg.hWnd, ctypes.byref(rect))
-                b = self._BORDER
-                at_left   = x - rect.left < b
-                at_right  = rect.right - x < b
-                at_top    = y - rect.top < b
-                at_bottom = rect.bottom - y < b
-                if at_top and at_left:
-                    return True, 13
-                if at_top and at_right:
-                    return True, 14
-                if at_bottom and at_left:
-                    return True, 16
-                if at_bottom and at_right:
-                    return True, 17
-                if at_left:
-                    return True, 10
-                if at_right:
-                    return True, 11
-                if at_top:
-                    return True, 12
-                if at_bottom:
-                    return True, 15
-        except Exception:
-            pass
-        return super().nativeEvent(eventType, message)
-
     def closeEvent(self, event):
         self.refresh_timer.stop()
         self._interaction_timer.stop()

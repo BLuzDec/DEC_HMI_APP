@@ -1,0 +1,11 @@
+TYPE "{TIMERS_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Block Timers (all Real)
+// Replace {TIMERS_UDT} with block name, e.g. UDT_MPTS_Timers
+//-------------------------------------------------
+   STRUCT
+{TIMER_FIELDS}
+   END_STRUCT;
+
+END_TYPE

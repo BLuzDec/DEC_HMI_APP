@@ -1,0 +1,11 @@
+DATA_BLOCK "DB_{FB_NAME}_HMI_To_PLC"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0
+// HMI writes: control inputs + simulated i* feedbacks (iChamberPressure, iInletValvePressure, iOutletValvePressure)
+NON_RETAIN
+   STRUCT 
+{VARIABLES}
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

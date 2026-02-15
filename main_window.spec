@@ -16,6 +16,8 @@ base_dir = SPECPATH
 monitoring_dir = os.path.join(base_dir, 'monitoring')
 step7_dir = os.path.join(base_dir, 'step7_exchange')
 st_block_dir = os.path.join(base_dir, 'st_block')
+hmi_plc_dir = os.path.join(base_dir, 'hmi_plc')
+block_station_dir = os.path.join(base_dir, 'block_station_generator')
 images_dir = os.path.join(base_dir, 'Images')
 icon_file = os.path.join(images_dir, 'app_icon.ico')
 
@@ -37,6 +39,8 @@ datas = [
     os.path.join(images_dir, 'DEC_Monitoring.png'),
     os.path.join(images_dir, 'DEC_Exchange.png'),
     os.path.join(images_dir, 'DEC_S_T_BlockConfig.png'),
+    os.path.join(images_dir, 'DEC_HMI_PLC.png'),
+    os.path.join(images_dir, 'DEC_BlockStation.png'),
 ] if os.path.isfile(p)] + [
     # ── Shared UI (CustomTitleBar, get_app_icon) ───────────────────────
     (os.path.join(base_dir, 'shared'), 'shared'),
@@ -45,6 +49,9 @@ datas = [
     (monitoring_dir, 'monitoring'),
     (step7_dir, 'step7_exchange'),
     (st_block_dir, 'st_block'),
+    (hmi_plc_dir, 'hmi_plc'),
+    (os.path.join(hmi_plc_dir, 'projects'), 'hmi_plc/projects'),
+    (block_station_dir, 'block_station_generator'),
 
     # ── Onboarding assets (tile images) ───────────────────────────────
     (os.path.join(base_dir, 'onboarding', 'assets'), 'onboarding/assets'),
@@ -102,6 +109,17 @@ hidden_imports = [
     'external.analytics_window',
     'external.calculations',
     'external.database',
+    # hmi_plc sub-app
+    'hmi_plc.main',
+    'hmi_plc.main_window',
+    'hmi_plc.requests_loader',
+    'hmi_plc.hmi_components',
+    'hmi_plc.hmi_canvas_widget',
+    'hmi_plc.block_component',
+    'hmi_plc.block_definitions',
+    'hmi_plc.fc_generator',
+    'hmi_plc.simulation',
+    'hmi_plc.simulation_config_widget',
     # misc
     'psutil',
     'json',

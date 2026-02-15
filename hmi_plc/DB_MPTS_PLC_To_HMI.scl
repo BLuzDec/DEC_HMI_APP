@@ -1,0 +1,29 @@
+DATA_BLOCK "DB_MPTS_PLC_To_HMI"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.0
+// PLC writes: FB outputs (HMI reads)
+NON_RETAIN
+   STRUCT 
+	St_Busy : Bool;
+	St_Charged : Bool;
+	St_Discharged : Bool;
+	St_Done : Bool;
+	St_Error : Bool;
+	St_Alarm : Bool;
+	St_Mode : Int;
+	oInletValvePR : Real;
+	oOutletValvePR : Real;
+	oChamberValvePR : Real;
+	oChamberValveOn : Bool;
+	oVibratorPR : Real;
+	oVibratorOn : Bool;
+	bToleranceFailureDetected : Bool;
+	iToleranceFailureSource : Int;
+	oFullRedValveOn : Bool;
+	oChamberVacuumValveOn : Bool;
+	bStart_Stop_Operator : Bool;
+	HMI_Data : "UDT_MPTS_HMI";
+   END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

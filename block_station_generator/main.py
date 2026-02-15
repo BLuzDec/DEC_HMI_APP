@@ -1,6 +1,7 @@
 """
-S&T Block Generation - Sub-application.
-Generates S&T blocks for process control and automation configurations.
+Block/Station Generator - Sub-application.
+Generates or modifies blocks and stations. A station is a system; a block is a subsystem.
+Focus: stepper part (GRAFCET) which works in cases within function blocks.
 """
 import sys
 import os
@@ -17,12 +18,12 @@ from shared.title_bar import CustomTitleBar, get_app_icon
 from shared.frameless_resize import FramelessResizeMixin
 
 
-class STBlockWindow(FramelessResizeMixin, QMainWindow):
-    """Placeholder window for S&T block generation."""
+class BlockStationGeneratorWindow(FramelessResizeMixin, QMainWindow):
+    """Window for block/station generation and modification."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("S&T Block Generation")
+        self.setWindowTitle("Block/Station Generator")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         icon = get_app_icon()
         if icon and not icon.isNull():
@@ -41,7 +42,7 @@ class STBlockWindow(FramelessResizeMixin, QMainWindow):
 
         self._title_bar = CustomTitleBar(
             self,
-            title="S&T Block Generation",
+            title="Block/Station Generator",
             show_menu_bar=False,
         )
         root_layout.addWidget(self._title_bar)
@@ -49,11 +50,17 @@ class STBlockWindow(FramelessResizeMixin, QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addStretch()
-        title = QLabel("S&T Block Generation")
+        title = QLabel("Block/Station Generator")
         title.setStyleSheet("color: #ffffff; font-size: 24px; font-weight: bold;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
-        desc = QLabel("This application will generate S&T blocks for process control and automation configurations.\n\n(Placeholder - to be implemented)")
+        desc = QLabel(
+            "Generate or modify blocks and stations. "
+            "Stations are systems; blocks are subsystems. "
+            "Focus: stepper (GRAFCET) in function blocks.\n\n"
+            "Templates: Templates/Blocks and Templates/Stations\n\n"
+            "(Placeholder - to be implemented)"
+        )
         desc.setStyleSheet("color: #b0b0b0; font-size: 14px;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
@@ -66,6 +73,6 @@ class STBlockWindow(FramelessResizeMixin, QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = STBlockWindow()
+    window = BlockStationGeneratorWindow()
     window.show()
     sys.exit(app.exec())

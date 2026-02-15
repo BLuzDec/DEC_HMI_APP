@@ -1,0 +1,6 @@
+Variable;Type;Min;Max;Unit;Name;PLC_VAR_NAME
+StartRecipe;BOOL;0;1;-;Start recipe;DB_Device.StartRecipe
+StopRecipe;BOOL;0;1;-;Stop recipe;DB_Device.StopRecipe
+TargetWeight_Setpoint;REAL;0;10;g;Target weight setpoint;DB_Device.TargetWeight
+EjectorPosition_Command;REAL;0;100;%;Ejector position command;DB_Device.EjectorPos
+ResetCounter;BOOL;0;1;-;Reset dose counter;DB_Device.ResetCounter

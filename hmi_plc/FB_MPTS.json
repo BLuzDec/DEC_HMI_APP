@@ -1,0 +1,546 @@
+{
+  "name": "FB_MPTS",
+  "title": "MPTS",
+  "source": "FB_MPTS.scl",
+  "inputs": [
+    {
+      "name": "Cmd.Run",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Cmd.Charge",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Cmd.Discharge",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Cmd.Venting",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Cmd.Unclogging",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Cmd.LeakTest",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "E_Stop",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Alarm",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "HeadInPosition",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rInletClosePressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rInletPreVacuumPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rOutletClosePressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rVacuumPressure1",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rEjectingPressure1",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rEjectingPressure2",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rUncloggingPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rPreVacuumPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rStandbyAtmPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rChamberCleaningPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.iNumDosesBeforeCleaning",
+      "type": "Int",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rPressureOutletVvibration",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rVibratorPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rInletOpenPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rOutletOpenPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rLeakTestClosingPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rLeakTestPreTestPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Parameters.rLeakTestAdmissibleDelta",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bUseInletPinchValve",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bVialPreVacuum",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bUsePressureRegulationFeedback",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bManualRequestDischarge",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bOutlet_Vibration",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bChamberCleaning",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Settings.bLeakTestAtStartup",
+      "type": "Bool",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerSuction",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerEjection1",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerEjection2",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerUncloggingVacuumT20",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerUncloggingPressureT21",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayOpenInletValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayPreVacuumValves",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayCloseInletValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayAtmPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayOpenOutletValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelaySetEjectingPressure1",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayCloseOutletValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerPreVacuum",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayCloseInletOutletValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rVibrationFrequency",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayStartOutletVibration",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayVibrator",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerVibrator",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerSelfCheckLinearActuatorHoming",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerSelfCheckPinchValveSealing",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rLeakTestTime",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rLeakTestValveCycleDelay",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerSelfCheckAirFlow",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerChamberCleaning",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerCleaningPressurization",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rTimerPreCleaningPressurization",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayActivateChValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "Timers.rDelayDeactivateChValve",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "iChamberPressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "iInletValvePressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    },
+    {
+      "name": "iOutletValvePressure",
+      "type": "Real",
+      "desc": "",
+      "direction": "request"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "St.Busy",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Charged",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Discharged",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Done",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Error",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Alarm",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "St.Mode",
+      "type": "Int",
+      "desc": ""
+    },
+    {
+      "name": "oInletValvePR",
+      "type": "Real",
+      "desc": ""
+    },
+    {
+      "name": "oOutletValvePR",
+      "type": "Real",
+      "desc": ""
+    },
+    {
+      "name": "oChamberValvePR",
+      "type": "Real",
+      "desc": ""
+    },
+    {
+      "name": "oChamberValveOn",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "oVibratorPR",
+      "type": "Real",
+      "desc": ""
+    },
+    {
+      "name": "oVibratorOn",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "bToleranceFailureDetected",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "iToleranceFailureSource",
+      "type": "Int",
+      "desc": ""
+    },
+    {
+      "name": "oFullRedValveOn",
+      "type": "Bool",
+      "desc": ""
+    },
+    {
+      "name": "oChamberVacuumValveOn",
+      "type": "Bool",
+      "desc": ""
+    }
+  ],
+  "in_out": [
+    {
+      "name": "bStart_Stop_Operator",
+      "type": "Bool",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.oManualRunMPTS",
+      "type": "Bool",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.oManualUnclogging",
+      "type": "Bool",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.iStatus",
+      "type": "Int",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.iErrorCode",
+      "type": "Int",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.bToleranceFault",
+      "type": "Bool",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.iToleranceSource",
+      "type": "Int",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.bManualMode",
+      "type": "Bool",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.iCurrentStep",
+      "type": "Int",
+      "desc": "",
+      "direction": "status"
+    },
+    {
+      "name": "HMI_Data.tToleranceTimeout",
+      "type": "Time",
+      "desc": "",
+      "direction": "status"
+    }
+  ]
+}

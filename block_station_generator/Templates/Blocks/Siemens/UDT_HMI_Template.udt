@@ -1,0 +1,23 @@
+TYPE "{HMI_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Block HMI Data Exchange Structure
+// Used as VAR_IN_OUT with FB
+// Replace {HMI_UDT} with block name, e.g. UDT_MPTS_HMI
+//
+// Constant values for iStatus: 0=Idle, 1=Running, 2=Manual, 3=Error
+// Constant values for iErrorCode: 0=None, 1=ToleranceTimeout, etc.
+//-------------------------------------------------
+   STRUCT
+      // --- HMI Input (from operator) ---
+{HMI_INPUT_FIELDS}
+      
+      // --- HMI Output (to display) ---
+      iStatus : Int := 0;
+      iErrorCode : Int := 0;
+      bManualMode : Bool := FALSE;
+      iCurrentStep : Int := 0;
+{HMI_OUTPUT_FIELDS}
+   END_STRUCT;
+
+END_TYPE

@@ -1,0 +1,832 @@
+FUNCTION_BLOCK "FB_MPTS"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+   VAR_INPUT 
+	  Cmd : "UDT_MPTS_Commands";
+	  E_Stop : Bool;
+	  Alarm : Bool;
+	  HeadInPosition : Bool := TRUE;   // FALSE forces ALARM state
+      Parameters : "UDT_MPTS_Parameters";
+      Settings : "UDT_MPTS_Settings";
+      Timers : "UDT_MPTS_Timers";
+      iChamberPressure : Real;
+      iInletValvePressure : Real;
+      iOutletValvePressure : Real;
+   END_VAR
+
+   VAR_OUTPUT 
+	  St : "UDT_MPTS_Status";
+      oInletValvePR : Real;
+      oOutletValvePR : Real;
+      oChamberValvePR : Real;
+      oChamberValveOn : Bool := FALSE;   // OnOff Valve for Chamber Pressure Regulation (FALSE=exhaust, True=ON) / On=Open, Off=Close
+      oVibratorPR : Real;
+      oVibratorOn : Bool;   // Triggers VTEM Deblock On/Off for Vibrator
+      bToleranceFailureDetected : Bool;   // TRUE when pressure tolerance timeout expired (TwinCAT upgrade)
+      iToleranceFailureSource : Int;   // 0=None, 1=Chamber, 2=Inlet, 3=Outlet (TwinCAT upgrade)
+	  //--- Vacuum valves For Custom MPTS Systems ---
+	  oFullRedValveOn 		: Bool := FALSE;   // On=Full, Off=Reduced - Full/Reduced Vacuum valve ON/OFF
+	  oChamberVacuumValveOn : Bool := FALSE;   // OnOff Valve for Chamber Vacuum instead of using vacuum from oChamberValvePR
+   END_VAR
+
+   VAR_IN_OUT
+      bStart_Stop_Operator : Bool;
+	  HMI_Data : "UDT_MPTS_HMI";
+   END_VAR
+
+   VAR 
+      Step : Int := #S0_START_UP;
+      PreviousStep : Int := #S0_START_UP;
+      bFirstStepCycle : Bool;
+      bRequestAlarm : Bool := FALSE;
+      ton_S6_DelayPreVacuumValves {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S7_TimerPreVacuum {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S8_DelayCloseInletOutletValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S9_VACUUM_INIT {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S10_DelayOpenInletValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S20_TimerSuction {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_DelayCloseInletValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S30_DelayAtmPressure {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S30_S40_DelayOpenOutletValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S30_S50_S55_DelaySetEjectingPressure1 {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_TimerEjection1 {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S60_S61_TimerEjection2 {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S62_DelayCloseOutletValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S63_TimerUncloggingPressure {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_ChamberCleaning {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S40_CleaningPressurization {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_DelayVibrator {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      tp_TimerVibrator {InstructionName := 'TP_TIME'; LibVersion := '1.0'} : TP_TIME;
+      tp_CutPressureVibrator {InstructionName := 'TP_TIME'; LibVersion := '1.0'} : TP_TIME;
+      ton_DelayActivateChValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_DelayDeactivateChValve {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S700_TimerUncloggingVacuum {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      ton_S720_TimerUncloggingPressure {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      fb_LeakTest { S7_SetPoint := 'False'} : "FB_LeakTest";
+      rAtmPressure : Real := 0.0;
+      bDischarge : Bool := FALSE;
+      bChamberPressureSP_ToleranceOk : Bool;
+      bInletValveSP_ToleranceOk : Bool;
+      bOutletValveSP_ToleranceOk : Bool;
+      fbOutletVibration { S7_SetPoint := 'False'} : "FB_OutletVibration";
+      tonDelayStartOutletVibration {InstructionName := 'TON_TIME'; LibVersion := '1.0'; S7_SetPoint := 'False'} : TON_TIME;
+      bRequestDischarge : Bool;
+      rtrigReqDischarge {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      bCleaningNeeded : Bool;
+      bChamberCleaningActive : Bool;
+      ton_ToleranceTimeout {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      bCheckOutletTolerance : Bool;
+      bCheckInletTolerance : Bool;
+      bCheckChamberTolerance : Bool;
+      rtrigRun {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigCharge {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigDischarge {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigManualRun {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+      rtrigUnclogging {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;
+	  bManualModeActive : Bool;
+	  vRun : Bool;
+	  vCharge : Bool;
+	  vDischarge : Bool;
+   END_VAR
+
+   VAR RETAIN
+   	  iUncleanedDoseCount : Int := 0;   // Counter for number of doses completed (resets before cleaning)
+      iTotalDoseCount : Int := 0;   // Total dose count that never resets
+   END_VAR
+
+   VAR_TEMP 
+      Temporary_for_Alarm : Bool;
+   END_VAR
+
+   VAR CONSTANT 
+      S0_START_UP : Int := 0;
+      S10_INIT_CLOSE_OUTLET : Int := 10;
+      S20_INIT_OPEN_INLET : Int := 20;
+      S30_CLEANING_CHAMBER : Int := 30;
+      S40_CLEANING_PRESSURIZATION : Int := 40;
+      S50_IDLE : Int := 50;
+      S55_VENTING : Int := 55;   // Venting state: Inlet CLOSE, Outlet OPEN, Chamber 0 bar
+      S60_CLOSE_INLET_PRE_VAC : Int := 60;
+      S70_PRE_VACUUM : Int := 70;
+      S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM : Int := 80;
+      S90_VACUUM_INIT : Int := 90;
+      S100_OPEN_INLET_WAIT_SUCTION : Int := 100;
+      S120_CLOSE_INLET_WAIT_PRESSURE : Int := 120;
+      S150_CHAMBER_CLEANING : Int := 150;
+      S200_SUCTION : Int := 200;
+      S230_CLOSE_INLET : Int := 230;
+      S300_DOSING_WAIT_ATM_PRESSURE : Int := 300;
+      S400_DOSING_OPEN_OUTLET : Int := 400;
+      S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE : Int := 410;
+      S500_DOSING_OPEN_OUTLET_AND_WAIT : Int := 500;
+      S510_DOSING_PREPARING_FOR_EJECTION1 : Int := 510;
+      S520_DOSING_EJECTION1_WITH_SET_DELAY : Int := 520;
+      S600_DOSING_PREPARING_FOR_EJECTION2 : Int := 600;
+      S610_DOSING_EJECTION2 : Int := 610;
+      S630_DOSING_CLOSE_OUTLET : Int := 630;
+      S640_CHAMBER_UNCLOGGING : Int := 640;
+      S650_BACK_TO_ATM_PRESSURE : Int := 650;
+      S700_UNCLOGGING_VACUUM : Int := 700;   // Standalone Unclogging: vacuum valve open, T20
+      S710_UNCLOGGING_SET_PRESSURE : Int := 710;   // Standalone Unclogging: set pressure P10, wait OK
+      S720_UNCLOGGING_PRESSURE_VALVE : Int := 720;   // Standalone Unclogging: pressure valve open, T21
+      S730_UNCLOGGING_BACK_IDLE : Int := 730;   // Standalone Unclogging: back to Idle
+      S5_LEAKTEST_STARTUP : Int := 5;   // Leak test at startup (before Idle)
+      S800_LEAKTESTING : Int := 800;   // Leak test from Idle (Cmd.LeakTest)
+      S998_ALARM : Int := 998;
+      S999_FAULT : Int := 999;
+      E_Seq_MPTS_Alarm : Int := 998;   // Alias for S998_ALARM
+      DELAY_DEBLOCKING_VTEM : Time := T#1MS;
+      DELAY_BLOCKING_VTEM : Real := 200.0;
+      PRESSURE_REGULATOR_TOLERANCE : Real := 0.05;
+      TOLERANCE_TIMEOUT : Time := T#10S;
+	  HMI_STATUS_IDLE : INT := 0;
+	  // 1 = Charging, 2 = Manual, 3 = Discharging, 4 = Unclogging, 5 = Venting, 6 = Cleaning, 7 = Leaktesting
+	  STATUS_CHARGING : Int := 1;      // 1 = Charging
+	  STATUS_MANUAL : Int := 2;        // 2 = Manual
+	  STATUS_DISCHARGING : Int := 3;   // 3 = Discharging
+	  STATUS_UNCLOGGING : Int := 4;    // 4 = Unclogging
+	  STATUS_VENTING : Int := 5;       // 5 = Venting
+	  STATUS_CLEANING : Int := 6;      // 6 = Cleaning
+	  STATUS_LEAKTESTING : Int := 7;   // 7 = Leaktesting
+	  HMI_ERROR_NONE : Int := 0;
+	  HMI_ERROR_TOLERANCE_TIMEOUT : Int := 1;
+	  HMI_TOL_SRC_NONE : Int := 0;
+	  HMI_TOL_SRC_CHAMBER : Int := 1;
+	  HMI_TOL_SRC_INLET : Int := 2;
+	  HMI_TOL_SRC_OUTLET : Int := 3;
+   END_VAR
+
+
+BEGIN
+	//------------------------------ Timers Open/Close InletValve
+	#ton_S6_DelayPreVacuumValves(IN := #Step = #S60_CLOSE_INLET_PRE_VAC,
+	                             PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayPreVacuumValves * 1000.0)));
+	
+	#ton_S7_TimerPreVacuum(IN := #Step = #S70_PRE_VACUUM,
+	                       PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerPreVacuum * 1000.0)));
+	
+	#ton_S8_DelayCloseInletOutletValve(IN := #Step = #S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM,
+	                                   PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayCloseInletOutletValve * 1000.0)));
+	
+	#ton_S9_VACUUM_INIT(IN := #Step = #S90_VACUUM_INIT,
+	                    PT := #DELAY_DEBLOCKING_VTEM);
+	
+	
+	#ton_S10_DelayOpenInletValve(IN := #Step = #S100_OPEN_INLET_WAIT_SUCTION,
+	                             PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayOpenInletValve * 1000.0)));
+	
+	#ton_DelayCloseInletValve(IN := #Step = #S230_CLOSE_INLET,
+	                          PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayCloseInletValve * 1000.0)));
+	//------------------------------ Timers Main
+	#ton_S20_TimerSuction(IN := #Step = #S200_SUCTION,
+	                      PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerSuction * 1000.0)));
+	
+	#ton_S30_DelayAtmPressure(IN := #Step = #S300_DOSING_WAIT_ATM_PRESSURE,
+	                          PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayAtmPressure * 1000.0)));
+	
+	#ton_S30_S40_DelayOpenOutletValve(IN := #Step = #S400_DOSING_OPEN_OUTLET
+	                                  OR #Step = #S300_DOSING_WAIT_ATM_PRESSURE,
+	                                  PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayOpenOutletValve * 1000.0)));
+	
+	#ton_TimerEjection1(IN := #Step = #S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE
+	                    OR #Step = #S520_DOSING_EJECTION1_WITH_SET_DELAY,
+	                    PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerEjection1 * 1000.0)));
+	
+	#ton_S30_S50_DelaySetEjectingPressure1(IN := #Step = #S500_DOSING_OPEN_OUTLET_AND_WAIT,
+	                                       PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelaySetEjectingPressure1 * 1000.0)));
+	
+	#ton_S60_S61_TimerEjection2(IN := #Step = #S600_DOSING_PREPARING_FOR_EJECTION2,
+	                            PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerEjection2 * 1000.0)));
+	
+	#ton_S62_DelayCloseOutletValve(IN := #Step = #S630_DOSING_CLOSE_OUTLET,
+	                               PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayCloseOutletValve * 1000.0)));
+	
+	#ton_S700_TimerUncloggingVacuum(IN := #Step = #S700_UNCLOGGING_VACUUM,
+	                                PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerUncloggingVacuumT20 * 1000.0)));
+	
+	#ton_S720_TimerUncloggingPressure(IN := #Step = #S720_UNCLOGGING_PRESSURE_VALVE,
+	                                 PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerUncloggingPressureT21 * 1000.0)));
+	
+	#ton_S40_CleaningPressurization(IN := #Step = #S40_CLEANING_PRESSURIZATION,
+	                                   PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerPreCleaningPressurization * 1000.0)));
+	
+	#ton_DelayVibrator(IN := #Step >= #S200_SUCTION,
+	                   PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayVibrator * 1000.0)));
+	#tp_TimerVibrator(IN := #ton_DelayVibrator.Q,
+	                  PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerVibrator * 1000.0)));
+	#tp_CutPressureVibrator(IN := #ton_DelayVibrator.Q,
+	                        PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rTimerVibrator + #DELAY_BLOCKING_VTEM)));	
+	
+	//------------------------------ Pressure Regulation Feedback
+	IF #Settings.bUsePressureRegulationFeedback THEN
+
+		// Steps where the Outlet pinch or valve is concerned (anything that adjusts, sets, or expects outlet valve movement/tolerance)
+		#bCheckOutletTolerance := (#Step = #S30_CLEANING_CHAMBER)
+			OR (#Step = #S60_CLOSE_INLET_PRE_VAC)
+			OR (#Step = #S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM)
+			OR (#Step = #S90_VACUUM_INIT)
+			OR (#Step = #S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE)
+			OR (#Step = #S500_DOSING_OPEN_OUTLET_AND_WAIT)
+			OR (#Step = #S510_DOSING_PREPARING_FOR_EJECTION1)
+			OR (#Step = #S600_DOSING_PREPARING_FOR_EJECTION2)
+			OR (#Step = #S610_DOSING_EJECTION2)
+			OR (#Step = #S630_DOSING_CLOSE_OUTLET);
+	    IF #bCheckOutletTolerance THEN
+			#bOutletValveSP_ToleranceOk := "fToleranceCalc"(Input := #iOutletValvePressure,
+		                                                    SetPoint := #oOutletValvePR,
+		                                                    Tolerance := PRESSURE_REGULATOR_TOLERANCE
+		                                                    );
+		END_IF;
+		
+		// Steps where the Chamber pressure is concerned (e.g. standalone unclogging P10)
+		#bCheckChamberTolerance := (#Step = #S710_UNCLOGGING_SET_PRESSURE);
+		IF #bCheckChamberTolerance THEN
+			#bChamberPressureSP_ToleranceOk := "fToleranceCalc"(Input := #iChamberPressure,
+			                                                    SetPoint := #oChamberValvePR,
+			                                                    Tolerance := PRESSURE_REGULATOR_TOLERANCE);
+		END_IF;
+		
+		// Steps where the Inlet pinch or valve is concerned (anything that adjusts, sets, or expects inlet valve movement/tolerance)
+		#bCheckInletTolerance := (#Step = #S20_INIT_OPEN_INLET)
+			OR (#Step = #S60_CLOSE_INLET_PRE_VAC)
+			OR (#Step = #S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM)
+			OR (#Step = #S100_OPEN_INLET_WAIT_SUCTION)
+			OR (#Step = #S200_SUCTION)
+			OR (#Step = #S230_CLOSE_INLET)
+			OR (#Step = #S300_DOSING_WAIT_ATM_PRESSURE);
+		IF #bCheckInletTolerance THEN
+			#bInletValveSP_ToleranceOk := "fToleranceCalc"(Input := #iInletValvePressure,
+														SetPoint := #oInletValvePR,
+														Tolerance := PRESSURE_REGULATOR_TOLERANCE
+			);
+		END_IF;
+
+		
+		#iToleranceFailureSource := HMI_TOL_SRC_NONE;
+
+		#ton_ToleranceTimeout(IN := #Settings.bUsePressureRegulationFeedback
+			AND ((#bCheckOutletTolerance AND NOT #bOutletValveSP_ToleranceOk)
+				OR (#bCheckInletTolerance AND NOT #bInletValveSP_ToleranceOk))),
+			PT := #TOLERANCE_TIMEOUT);
+
+		#bToleranceFailureDetected := FALSE;
+		IF #ton_ToleranceTimeout.Q THEN
+			#bToleranceFailureDetected := TRUE;
+			IF #bCheckOutletTolerance AND NOT #bOutletValveSP_ToleranceOk THEN
+				#iToleranceFailureSource := HMI_TOL_SRC_OUTLET;
+			ELSIF #bCheckInletTolerance AND NOT #bInletValveSP_ToleranceOk THEN
+				#iToleranceFailureSource := HMI_TOL_SRC_INLET;
+			END_IF;
+		END_IF;
+	ELSE //no pressure regulation feedback
+	    #bInletValveSP_ToleranceOk := TRUE;
+	    #bOutletValveSP_ToleranceOk := TRUE;
+	    #bChamberPressureSP_ToleranceOk := TRUE;
+	END_IF;
+
+	//------------------------------ Cleaning Needed
+	IF #Settings.bChamberCleaning THEN
+		#bCleaningNeeded := TRUE;
+	ELSIF (#Parameters.iNumDosesBeforeCleaning > 0) THEN
+		#bCleaningNeeded := (#iUncleanedDoseCount >= #Parameters.iNumDosesBeforeCleaning);
+	ELSE
+		#bCleaningNeeded := FALSE;
+	END_IF;
+		
+	//------------------------------ Rising edge detection for Run, Charge, Discharge
+	#rtrigRun(CLK := #Cmd.Run OR #bStart_Stop_Operator);
+	#rtrigCharge(CLK := #Cmd.Charge);
+	#rtrigDischarge(CLK := #Cmd.Discharge);
+	#rtrigManualRun(CLK := #HMI_Data.oManualRunMPTS);
+	#rtrigUnclogging(CLK := #Cmd.Unclogging OR #HMI_Data.oManualUnclogging)
+	#HMI_Data.oManualUnclogging := FALSE;
+
+	//------------------------------ Logic for vRun, vCharge, vDischarge
+
+	IF #rtrigRun.Q THEN
+	    // If Run triggered: set both vCharge and vDischarge to true (runs one after the next)
+	    #vRun := TRUE;
+	    #vCharge := TRUE;
+	    #vDischarge := TRUE;
+	END_IF;
+
+	IF #rtrigManualRun.Q THEN
+	    #HMI_Data.oManualRunMPTS := FALSE;
+	    #vRun := TRUE;
+	    #vCharge := TRUE;
+	    #vDischarge := TRUE;
+	END_IF;
+
+	IF #rtrigCharge.Q THEN
+	    // If Charge triggered: vCharge gets true only if there's no bCharged
+	    IF NOT #St.Charged THEN
+	        #vCharge := TRUE;
+	    END_IF;
+	END_IF;
+
+	IF #rtrigDischarge.Q THEN
+	    // If Discharge triggered: needs bCharged in order to work
+	    IF #St.Charged THEN
+	        #vDischarge := TRUE;
+	    END_IF;
+	END_IF;
+
+	IF NOT #vCharge AND NOT #vDischarge THEN
+	    #vRun := FALSE;
+	END_IF;
+
+	#bManualModeActive := (#vCharge OR #vDischarge) AND NOT #vRun;
+
+	//------------------------------ MPTS State Machine
+
+	IF #Alarm OR NOT #HeadInPosition THEN
+	    #Step := #E_Seq_MPTS_Alarm;
+	END_IF;
+
+	//------------------------------ Other Conditions
+	#rAtmPressure := 0.0;
+	
+	IF #tp_CutPressureVibrator.Q AND NOT #tp_TimerVibrator.Q THEN
+	    #oVibratorPR := #rAtmPressure;
+	ELSE
+	    #oVibratorPR := #Parameters.rVibratorPressure;
+	END_IF;
+	IF #tp_CutPressureVibrator.Q THEN
+	    #oVibratorOn := TRUE;
+	ELSE
+	    #oVibratorOn := FALSE;
+	END_IF;
+	
+	//Setting: Outlet Vibration TO UPDATE TOBECHECKED: COULD BE LARGELY IMPROVED THE WAY IT WAS CODED.
+	IF #Settings.bOutlet_Vibration THEN
+	    
+	    IF #Step = #S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE
+	        OR #Step = #S520_DOSING_EJECTION1_WITH_SET_DELAY
+	        OR #Step = #S600_DOSING_PREPARING_FOR_EJECTION2 THEN
+	        #tonDelayStartOutletVibration(IN := TRUE,
+	                                      PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayStartOutletVibration * 1000.0)));
+	        #fbOutletVibration(bStart := #tonDelayStartOutletVibration.Q,
+	                           tChangeStateTime := DINT_TO_TIME(REAL_TO_DINT(#Timers.rVibrationFrequency * 1000.0)),
+	                           rPressureVibration := #Parameters.rPressureOutletVvibration,
+	                           oOutput => #oOutletValvePR);
+	    ELSE
+	        #tonDelayStartOutletVibration(IN := FALSE,
+	                                      PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayStartOutletVibration)));
+	        #fbOutletVibration(bStart := FALSE,
+	                           tChangeStateTime := DINT_TO_TIME(REAL_TO_DINT(#Timers.rVibrationFrequency * 1000.0)),
+	                           rPressureVibration := #Parameters.rPressureOutletVvibration);
+	    END_IF;
+	END_IF;
+	
+	//------------------------------ MPTS GRAFCET
+	//PROTECTION IN CASE OF ALARM/FATAL:
+	(*
+	IF GVL_Alarms.DefectFatalIsPresent THEN
+	  RequestFault();
+	ELSIF Alarm.OneAlarmInMPTS THEN
+	  RequestAlarm();
+	END_IF;
+	*)
+
+	(* COMMENTED OUT TO BE CHECKED: COULD BE LARGELY IMPROVED THE WAY IT WAS CODED. NEEDS TO BE REVIEWED.
+	IF (NOT #bStart_Stop_Operator
+	    AND #Step <> #S998_ALARM
+	    AND #Step <> #S999_FAULT) THEN
+	    
+	    #Step := #S50_IDLE;
+	    #oChamberValvePR := #rAtmPressure;
+	    #oOutletValvePR := #Parameters.rOutletClosePressure;
+	    #oInletValvePR := #Parameters.rInletClosePressure;
+	END_IF;
+	*)
+	
+	IF #Step <> #PreviousStep THEN
+	    #bFirstStepCycle := TRUE;
+	    #PreviousStep := #Step;
+	ELSE
+	    #bFirstStepCycle := FALSE;
+	END_IF;
+	
+	#Temporary_for_Alarm := FALSE;
+	CASE #Step OF
+	    #S0_START_UP:
+	        IF #bFirstStepCycle THEN
+	            #St.Busy := FALSE;
+	        ELSE
+	            #St.Busy := TRUE;
+	            IF #Settings.bLeakTestAtStartup THEN
+	                #Step := #S5_LEAKTEST_STARTUP;
+	            ELSE
+	                #Step := #S10_INIT_CLOSE_OUTLET;
+	            END_IF;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S5_LEAKTEST_STARTUP:
+	        #oChamberValvePR := #rAtmPressure;
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #fb_LeakTest(bExecute := TRUE,
+	                     bStartupMode := TRUE,
+	                     iPressure := #iOutletValvePressure,
+	                     rClosingPressure := #Parameters.rLeakTestClosingPressure,
+	                     rLeakPreTestPressure := #Parameters.rLeakTestPreTestPressure,
+	                     rOpenPressure := #Parameters.rOutletOpenPressure,
+	                     rAdmissibleDeltaPressure := #Parameters.rLeakTestAdmissibleDelta,
+	                     rLeakTestTime := #Timers.rLeakTestTime,
+	                     rValveCycleDelay := #Timers.rLeakTestValveCycleDelay);
+	        #oOutletValvePR := #fb_LeakTest.rValvePressureSetpoint;
+	        IF #fb_LeakTest.bDone THEN
+	            #Step := #S10_INIT_CLOSE_OUTLET;
+	        ELSIF #fb_LeakTest.bError THEN
+	            #bRequestAlarm := TRUE;
+	            #Step := #S998_ALARM;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S10_INIT_CLOSE_OUTLET:
+	        IF #bFirstStepCycle THEN
+	            #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        ELSE
+	            #Step := #S20_INIT_OPEN_INLET;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S20_INIT_OPEN_INLET:
+	        IF #bFirstStepCycle THEN
+	            #oInletValvePR := #Parameters.rInletOpenPressure;
+	        ELSE
+	            #Step := #S50_IDLE;
+	        END_IF;
+			
+		
+		// ******************************************************************
+		// --- PRE-CLEANING ---
+		// ******************************************************************
+		// ------------------------------------------------------------------
+	    #S30_CLEANING_CHAMBER:
+	        IF #bFirstStepCycle THEN
+				#iUncleanedDoseCount := 0;
+	            #bChamberCleaningActive := TRUE;
+	            #oChamberValvePR := #rAtmPressure;
+	            #oInletValvePR := #Parameters.rInletClosePressure;
+	            #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        ELSE
+	            IF #bOutletValveSP_ToleranceOk THEN
+	                #Step := #S40_CLEANING_PRESSURIZATION;
+	            END_IF;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S40_CLEANING_PRESSURIZATION:
+	        IF #bFirstStepCycle THEN
+	            #oChamberValvePR := #Parameters.rChamberCleaningPressure;
+	            #oInletValvePR := #Parameters.rInletClosePressure;
+	        ELSE
+	            IF (#ton_S40_CleaningPressurization.Q OR #Timers.rTimerPreCleaningPressurization <= 0.0) THEN
+	                #bChamberCleaningActive := FALSE;
+	                #St.Busy := FALSE;
+					IF #Settings.bVialPreVacuum THEN
+						#Step := #S60_CLOSE_INLET_PRE_VAC;
+					ELSE
+						#Step := #S90_VACUUM_INIT;
+					END_IF;
+	            END_IF;
+	        END_IF;
+
+		// ******************************************************************
+		// --- IDLE ---
+		// ******************************************************************
+	    // ---------------------------------------------------------------------------------
+	    #S50_IDLE:
+	        IF #bFirstStepCycle THEN
+				St.Mode := STATUS_IDLE;
+	            #St.Busy := #vDischarge OR #vCharge;
+	            #St.Done := FALSE;
+	        ELSE
+	            #oChamberValvePR := #rAtmPressure + #Parameters.rStandbyAtmPressure;
+				#oFullRedValveOn := TRUE; //TOBECHECKED: IF FALSE
+	            #oInletValvePR := #Parameters.rInletClosePressure;
+	            #oOutletValvePR := #Parameters.rOutletClosePressure;
+
+	            IF #bRequestAlarm THEN
+					St.Mode := STATUS_ALARM;
+	                #St.Busy := TRUE;
+	                #Step := #S998_ALARM;
+	            
+	            ELSIF #Cmd.Venting THEN
+					#St.Busy := TRUE;
+					#St.Mode := STATUS_VENTING;
+	                #Step := #S55_VENTING;
+	            
+	            ELSIF #rtrigUnclogging.Q AND NOT #vCharge AND NOT #vDischarge THEN
+					St.Mode := STATUS_UNCLOGGING;
+	                #St.Busy := TRUE;
+	                #Step := #S700_UNCLOGGING_VACUUM;
+	            
+	            ELSIF #vCharge THEN
+					St.Mode := STATUS_CHARGING;
+	                #St.Busy := TRUE;
+	                IF #bCleaningNeeded THEN
+						St.Mode := STATUS_CLEANING;
+	                    #Step := #S30_CLEANING_CHAMBER;
+	                ELSIF #Settings.bVialPreVacuum THEN
+	                    #Step := #S60_CLOSE_INLET_PRE_VAC;
+	                ELSE
+	                    #Step := #S90_VACUUM_INIT;
+	                END_IF;
+	            
+	            ELSIF #vDischarge THEN
+					St.Mode := STATUS_DISCHARGING;
+	                #St.Busy := TRUE;
+	                // Start discharge sequence from IDLE
+	                IF #Timers.rTimerEjection1 = 0.0 THEN
+	                    #Step := #S600_DOSING_PREPARING_FOR_EJECTION2;
+	                
+	                ELSIF (TIME_TO_INT(#ton_S30_S40_DelayOpenOutletValve.PT) <> 0 OR TIME_TO_INT(#ton_S30_S50_DelaySetEjectingPressure1.PT) = 0) THEN
+	                    #Step := #S400_DOSING_OPEN_OUTLET;
+	                
+	                ELSIF (TIME_TO_INT(#ton_S30_S50_DelaySetEjectingPressure1.PT) <> 0) THEN
+	                    #Step := #S500_DOSING_OPEN_OUTLET_AND_WAIT;
+	                
+	                END_IF;
+				ELSIF #Cmd.LeakTest THEN
+					St.Mode := STATUS_LEAKTESTING;
+					#St.Busy := TRUE;
+					#Step := #S800_LEAKTESTING;
+	            END_IF;
+	        END_IF;
+		
+		// ******************************************************************
+		// --- VENTING ---
+		// ******************************************************************
+		// Inlet CLOSE, Outlet OPEN, Pressure valve CLOSE, Vacuum valve OPEN, Ejecting pressure 0 bar
+	    // ------------------------------------------------------------------
+	    #S55_VENTING:
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        #oChamberValvePR := #rAtmPressure;   // 0 bar ejecting pressure
+			#oFullRedValveOn := FALSE;
+	        IF NOT #Cmd.Venting THEN
+	            #Step := #S50_IDLE;
+	        END_IF;
+		
+		// ******************************************************************
+		// --- VIAL PRE VACUUM ---
+		// ******************************************************************
+		// ------------------------------------------------------------------
+	    #S60_CLOSE_INLET_PRE_VAC:
+	        #oInletValvePR := #Parameters.rInletPreVacuumPressure;
+	        #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        IF #bInletValveSP_ToleranceOk AND #bOutletValveSP_ToleranceOk AND #ton_S6_DelayPreVacuumValves.Q THEN
+	            #Step := #S70_PRE_VACUUM;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S70_PRE_VACUUM:
+	        #oChamberValvePR := #Parameters.rPreVacuumPressure;
+	        IF #ton_S7_TimerPreVacuum.Q THEN
+	            #Step := #S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S80_CLOSE_INLET_OUTLET_PROCEED_TO_VACUUM:
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        #oChamberValvePR := #rAtmPressure;
+	        IF #bInletValveSP_ToleranceOk AND #bOutletValveSP_ToleranceOk AND #ton_S8_DelayCloseInletOutletValve.Q THEN
+	            #Step := #S100_OPEN_INLET_WAIT_SUCTION;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S90_VACUUM_INIT:
+	        #oChamberValvePR := #rAtmPressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        IF #bOutletValveSP_ToleranceOk AND #ton_S9_VACUUM_INIT.Q THEN
+	            #Step := #S100_OPEN_INLET_WAIT_SUCTION;
+	        END_IF;
+    
+		// ******************************************************************
+		// --- VACUUM ---
+		// ******************************************************************
+		// ------------------------------------------------------------------
+	    #S100_OPEN_INLET_WAIT_SUCTION:
+	        #oChamberValvePR := #Parameters.rVacuumPressure1;
+	        IF #ton_S10_DelayOpenInletValve.Q THEN
+	            #Step := #S200_SUCTION;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S200_SUCTION:
+	        IF #bFirstStepCycle THEN
+	            #oInletValvePR := #Parameters.rInletOpenPressure;
+	        ELSE
+	            IF #ton_S20_TimerSuction.Q THEN
+	                #Step := #S230_CLOSE_INLET;
+	            END_IF;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S230_CLOSE_INLET:
+	        #oChamberValvePR := #Parameters.rVacuumPressure1;
+	        IF #ton_DelayCloseInletValve.Q THEN
+	            #Step := #S300_DOSING_WAIT_ATM_PRESSURE;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S300_DOSING_WAIT_ATM_PRESSURE:
+	        IF #bFirstStepCycle THEN
+	            #oInletValvePR := #Parameters.rInletClosePressure;
+	            IF #Timers.rDelayAtmPressure > 0.0 THEN
+	                #oChamberValvePR := #rAtmPressure;
+	            END_IF;
+	        ELSIF #Timers.rDelayAtmPressure > 0.0 AND #ton_S30_DelayAtmPressure.Q THEN // After charge completes, wait for delay (if any) then go to IDLE
+	            #Step := #S50_IDLE;
+	            #vCharge := FALSE;
+	            #St.Charged := TRUE;   // Set charged state when returning to IDLE after charge
+	        ELSIF #Timers.rDelayAtmPressure = 0.0 THEN
+	            #Step := #S50_IDLE;
+	            #St.Charged := TRUE;   // Set charged state when returning to IDLE after charge
+	        END_IF;
+
+		// ******************************************************************
+		// --- DOSING ---
+		// ******************************************************************
+		// ------------------------------------------------------------------
+	    #S400_DOSING_OPEN_OUTLET:
+	        #oChamberValvePR := #Parameters.rEjectingPressure1;
+	        IF #ton_S30_S40_DelayOpenOutletValve.Q THEN
+	            #Step := #S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S410_DOSING_EJECTION1_NO_DELAY_CHAMBER_VALVE:
+	        IF #bFirstStepCycle THEN
+	            #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        ELSE
+	            IF #ton_TimerEjection1.Q THEN
+	                #Step := #S600_DOSING_PREPARING_FOR_EJECTION2;
+	            END_IF;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S500_DOSING_OPEN_OUTLET_AND_WAIT:
+	        IF #bFirstStepCycle THEN
+	            #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        ELSIF #ton_S30_S50_DelaySetEjectingPressure1.Q THEN
+	            #Step := #S520_DOSING_EJECTION1_WITH_SET_DELAY;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S520_DOSING_EJECTION1_WITH_SET_DELAY:
+	        IF #bFirstStepCycle THEN
+	            #oChamberValvePR := #Parameters.rEjectingPressure1;
+	        ELSIF #ton_TimerEjection1.Q THEN
+	            #Step := #S600_DOSING_PREPARING_FOR_EJECTION2;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S600_DOSING_PREPARING_FOR_EJECTION2:
+	        IF #bFirstStepCycle THEN
+	            #oChamberValvePR := #Parameters.rEjectingPressure2;
+	            #oOutletValvePR := #Parameters.rOutletOpenPressure;
+	        ELSIF #ton_S60_S61_TimerEjection2.Q THEN
+	            #Step := #S630_DOSING_CLOSE_OUTLET;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S630_DOSING_CLOSE_OUTLET:
+	        #oChamberValvePR := #rAtmPressure;
+	        IF #ton_S62_DelayCloseOutletValve.Q THEN
+	            #Step := #S650_BACK_TO_ATM_PRESSURE;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S650_BACK_TO_ATM_PRESSURE:
+			IF #bFirstStepCycle THEN
+	        	#oChamberValvePR := #rAtmPressure;
+	            #oOutletValvePR := #Parameters.rOutletClosePressure;
+	            #oInletValvePR := #Parameters.rInletClosePressure;
+			ELSIF #ton_S30_DelayAtmPressure.Q THEN
+	            // Increment dose counts
+	            #iUncleanedDoseCount := #iUncleanedDoseCount + 1;
+	            #iTotalDoseCount := #iTotalDoseCount + 1;
+	            
+				#vDischarge := FALSE;
+				#St.Charged := FALSE;   // Reset charged state after discharge completes
+				#St.Discharged := TRUE;
+				#St.Done := TRUE;
+				#Step := #S50_IDLE;
+			END_IF;
+		
+		// ******************************************************************
+		// --- UNCLOGGING SEQUENCE (unrelated to discharge unclogging) ---
+		// ******************************************************************
+		// Step 1: Vacuum valve open, Start T20. Transition: T20 elapsed
+		// Step 2: Set pressure to P10. Transition: P10 = OK
+		// Step 3: Open pressure valve, Start T21. Transition: T21 elapsed
+		// Step 4: Back to Idle
+	    // ------------------------------------------------------------------
+	    #S700_UNCLOGGING_VACUUM:
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        #oChamberValvePR := #Parameters.rVacuumPressure1;   // Vacuum valve open
+	        IF #ton_S700_TimerUncloggingVacuum.Q OR #Timers.rTimerUncloggingVacuumT20 <= 0.0 THEN
+	            #Step := #S710_UNCLOGGING_SET_PRESSURE;
+	        END_IF;
+	    // ------------------------------------------------------------------
+	    #S710_UNCLOGGING_SET_PRESSURE:
+	        IF #bFirstStepCycle THEN
+	            #oChamberValvePR := #Parameters.rUncloggingPressure;   // P10
+	        END_IF;
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        IF #bChamberPressureSP_ToleranceOk THEN
+	            #Step := #S720_UNCLOGGING_PRESSURE_VALVE;
+	        END_IF;
+	    // ------------------------------------------------------------------
+	    #S720_UNCLOGGING_PRESSURE_VALVE:
+	        #oChamberValvePR := #Parameters.rUncloggingPressure;   // Pressure valve open at P10
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        IF #ton_S720_TimerUncloggingPressure.Q OR #Timers.rTimerUncloggingPressureT21 <= 0.0 THEN
+	            #Step := #S730_UNCLOGGING_BACK_IDLE;
+	        END_IF;
+	    // ------------------------------------------------------------------
+	    #S730_UNCLOGGING_BACK_IDLE:
+	        #oChamberValvePR := #rAtmPressure;
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #oOutletValvePR := #Parameters.rOutletClosePressure;
+	        #St.Busy := FALSE;
+	        #Step := #S50_IDLE;
+
+		// ******************************************************************
+		// --- LEAKTESTING ---
+		// ******************************************************************
+		// ------------------------------------------------------------------
+	    #S800_LEAKTESTING:
+	        #oChamberValvePR := #rAtmPressure;
+	        #oInletValvePR := #Parameters.rInletClosePressure;
+	        #fb_LeakTest(bExecute := TRUE,
+	                     bStartupMode := FALSE,
+	                     iPressure := #iOutletValvePressure,
+	                     rClosingPressure := #Parameters.rLeakTestClosingPressure,
+	                     rLeakPreTestPressure := #Parameters.rLeakTestPreTestPressure,
+	                     rOpenPressure := #Parameters.rOutletOpenPressure,
+	                     rAdmissibleDeltaPressure := #Parameters.rLeakTestAdmissibleDelta,
+	                     rLeakTestTime := #Timers.rLeakTestTime,
+	                     rValveCycleDelay := #Timers.rLeakTestValveCycleDelay);
+	        #oOutletValvePR := #fb_LeakTest.rValvePressureSetpoint;
+	        IF #fb_LeakTest.bDone THEN
+	            #St.Busy := FALSE;
+	            #Step := #S50_IDLE;
+	        ELSIF #fb_LeakTest.bError THEN
+	            #bRequestAlarm := TRUE;
+	            #Step := #S998_ALARM;
+	        END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S999_FAULT:
+			#oChamberValvePR := #rAtmPressure;
+			#oOutletValvePR := #rAtmPressure;
+			#oInletValvePR := #rAtmPressure;
+			
+			IF NOT #Temporary_for_Alarm THEN
+				#St.Busy := FALSE;
+				#Step := #S0_START_UP;
+			END_IF;
+	    // ---------------------------------------------------------------------------------
+	    #S998_ALARM:
+	        IF #bFirstStepCycle THEN
+	            #bRequestAlarm := FALSE;
+	        ELSE
+	            IF NOT #Alarm AND #HeadInPosition THEN
+	                #bRequestAlarm := FALSE;
+	                #Step := #S50_IDLE;
+	            END_IF;
+				#bRequestAlarm := FALSE;
+	        END_IF;
+	END_CASE;
+	    
+	
+	//--- On/off valves and custom configuration management ---
+	// Valve activation delay TON
+	#ton_DelayActivateChValve(IN := NOT (#oChamberValvePR = #rAtmPressure OR #oChamberValvePR = #rAtmPressure + #Parameters.rStandbyAtmPressure), PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayActivateChValve * 1000.0)));
+	// Valve deactivation delay TON
+	#ton_DelayDeactivateChValve(IN := (#oChamberValvePR = #rAtmPressure OR #oChamberValvePR = #rAtmPressure + #Parameters.rStandbyAtmPressure), PT := DINT_TO_TIME(REAL_TO_DINT(#Timers.rDelayDeactivateChValve * 1000.0)));
+	IF #ton_DelayActivateChValve.Q THEN
+	    #oChamberValveOn := TRUE;
+	ELSIF #ton_DelayDeactivateChValve.Q THEN
+	    #oChamberValveOn := FALSE;
+	ELSE
+		#oChamberValveOn := oChamberValvePR > #rAtmPressure + #Parameters.rStandbyAtmPressure; //if no delay
+	END_IF;
+
+	#oChamberVacuumValveOn := oChamberValvePR < #rAtmPressure OR St.Mode = STATUS_VENTING;
+
+		
+	//HMI Data
+	IF #ton_ToleranceTimeout.Q THEN
+		#HMI_Data.iErrorCode := HMI_ERROR_TOLERANCE_TIMEOUT;
+		#HMI_Data.bToleranceFault := TRUE;
+		#HMI_Data.iToleranceSource := #iToleranceFailureSource;
+	ELSE
+		#HMI_Data.bToleranceFault := FALSE;
+		#HMI_Data.iErrorCode := HMI_ERROR_NONE;
+		#HMI_Data.iToleranceSource := HMI_TOL_SRC_NONE;
+	END_IF;
+
+	#HMI_Data.bManualMode := #bManualModeActive;
+	#HMI_Data.tToleranceTimeout := TOLERANCE_TIMEOUT;
+	#HMI_Data.iCurrentStep := #Step;
+
+	IF #HMI_Data.iErrorCode = HMI_ERROR_TOLERANCE_TIMEOUT THEN
+		#HMI_Data.iStatus := HMI_STATUS_ERROR;
+		#St.Error := TRUE;
+	ELSE
+		#HMI_Data.iStatus := St.Mode;
+	END_IF;
+	
+END_FUNCTION_BLOCK

@@ -1,0 +1,11 @@
+TYPE "{SETTINGS_UDT}"
+VERSION : 1.0
+//------------------------------------------------- 
+// Block Configuration Settings
+// Replace {SETTINGS_UDT} with block name, e.g. UDT_MPTS_Settings
+//-------------------------------------------------
+   STRUCT
+{SETTINGS_FIELDS}
+   END_STRUCT;
+
+END_TYPE
