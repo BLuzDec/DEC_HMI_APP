@@ -298,14 +298,16 @@ class GrafcetCanvas(QGraphicsView):
                 scene.addItem(trans_bar)
                 self._transition_items[sid] = trans_bar
 
-        # Orthogonal transition lines (from bottom of transition bar to next step)
+        # Transition lines: normal (down/side) or jump/goto (to upper step)
         line_offset = STEP_SIZE + TRANSITION_BAR_H + 4
+        jump_down = 50  # pixels down for jump arrow
         for s in model.steps:
             if not s.next_steps:
                 continue
             src_item = items.get(s.id)
             if not src_item:
                 continue
+            src_level = levels.get(s.id, 0)
             src_pt = src_item.scenePos()
             src_cx = src_pt.x() + STEP_WIDTH / 2
             src_bottom = src_pt.y() + line_offset
@@ -314,15 +316,50 @@ class GrafcetCanvas(QGraphicsView):
                 dst_item = items.get(nid)
                 if not dst_item:
                     continue
+                dst_level = levels.get(nid, 0)
                 dst_pt = dst_item.scenePos()
                 dst_cx = dst_pt.x() + STEP_WIDTH / 2
                 dst_top = dst_pt.y()
 
-                path = _orthogonal_line_path(src_cx, src_bottom, dst_cx, dst_top)
-                path_item = QGraphicsPathItem(path)
-                path_item.setPen(QPen(self._line_color, 2))
-                path_item.setZValue(0)
-                scene.addItem(path_item)
+                # Jump/goto: destination is above (lower level) or same level but different column
+                is_jump = dst_level < src_level or (dst_level == src_level and abs(dst_cx - src_cx) > 4)
+
+                if is_jump:
+                    # Line down, arrow, label with target step
+                    path = QPainterPath()
+                    path.moveTo(src_cx, src_bottom)
+                    path.lineTo(src_cx, src_bottom + jump_down)
+                    path_item = QGraphicsPathItem(path)
+                    path_item.setPen(QPen(self._line_color, 2))
+                    path_item.setZValue(0)
+                    scene.addItem(path_item)
+                    # Arrowhead (small triangle pointing down)
+                    arrow_y = src_bottom + jump_down
+                    arrow_path = QPainterPath()
+                    arrow_path.moveTo(src_cx, arrow_y + 10)
+                    arrow_path.lineTo(src_cx - 6, arrow_y - 4)
+                    arrow_path.lineTo(src_cx + 6, arrow_y - 4)
+                    arrow_path.closeSubpath()
+                    arrow_item = QGraphicsPathItem(arrow_path)
+                    arrow_item.setPen(QPen(self._line_color, 2))
+                    arrow_item.setBrush(QBrush(self._line_color))
+                    arrow_item.setZValue(0)
+                    scene.addItem(arrow_item)
+                    # Label: "→ S20" below the arrow
+                    label = QGraphicsTextItem(f"→ {nid}")
+                    label.setDefaultTextColor(QColor(self._line_color))
+                    label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                    br = label.boundingRect()
+                    label.setPos(src_cx - br.width() / 2, arrow_y + 4)
+                    label.setZValue(1)
+                    scene.addItem(label)
+                else:
+                    # Normal: orthogonal line to step below
+                    path = _orthogonal_line_path(src_cx, src_bottom, dst_cx, dst_top)
+                    path_item = QGraphicsPathItem(path)
+                    path_item.setPen(QPen(self._line_color, 2))
+                    path_item.setZValue(0)
+                    scene.addItem(path_item)
 
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-40, -40, 40, 40))
 

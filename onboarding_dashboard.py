@@ -198,7 +198,15 @@ class DashboardTile(QFrame):
             self.set_loading(False)
             return
         if os.path.isfile(script):
-            proc = subprocess.Popen([python_exe, script], cwd=root)
+            # On Windows: CREATE_NO_WINDOW prevents a brief console window flash when launching sub-apps
+            creationflags = (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            )
+            proc = subprocess.Popen(
+                [python_exe, script],
+                cwd=root,
+                creationflags=creationflags,
+            )
             self._dashboard.on_app_launched(self._app_module, self, process=proc)
         else:
             from PySide6.QtWidgets import QMessageBox
@@ -491,9 +499,44 @@ class OnboardingDashboard(FramelessResizeMixin, QMainWindow):
             tile.set_running(False)
         self._update_status_bar()
 
+    def _cleanup_on_close(self):
+        """Stop timer, terminate subprocesses, close in-process windows."""
+        self._process_check_timer.stop()
+        for module in list(self._open_apps.keys()):
+            entry = self._open_apps.pop(module, None)
+            if not entry:
+                continue
+            tile = entry.get("tile")
+            if tile:
+                tile.set_running(False)
+            # Terminate subprocess (development mode)
+            proc = entry.get("process")
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            # Close in-process window (frozen build)
+            w = entry.get("window")
+            if w is not None and w.isVisible():
+                try:
+                    w.close()
+                except Exception:
+                    pass
+
+    def closeEvent(self, event):
+        """Clean up on close: stop timer, terminate subprocesses, close in-process windows."""
+        self._cleanup_on_close()
+        event.accept()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = OnboardingDashboard()
     window.show()
+    app.aboutToQuit.connect(window._cleanup_on_close)
     sys.exit(app.exec())
